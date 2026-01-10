@@ -5,11 +5,8 @@ import WebSocket from "ws";
 import * as http from "http";
 import os from 'os';
 import FormData from 'form-data';
-import { Readable, Writable } from 'stream';
-import { promisify } from 'util';
-import stream from 'stream';
+import { Readable } from 'stream';
 import { Blob } from 'buffer';
-const pipeline = promisify(stream.pipeline);
 
 /**
  * HTTP headers type - maps header names to string or string array values.
@@ -104,15 +101,6 @@ type GoMessage =
 interface BodyReadError {
   statusCode: number;
   message: string;
-}
-
-// Platform binary mapping
-interface PlatformBinaryMap {
-  [arch: string]: string;
-}
-
-interface PlatformBinaries {
-  [platform: string]: PlatformBinaryMap;
 }
 
 // Request options for internal sendRequest
@@ -1105,54 +1093,53 @@ class CycleTLSWebSocket extends EventEmitter {
 
   // Internal method to handle incoming messages
   _handleMessage(method: string, data: WebSocketMessageData): void {
-    if (method === 'response') {
-      const responseData = data as ResponseMetadata;
-      this.responseStatus = responseData.statusCode;
-      this.responseHeaders = responseData.headers;
-    }
-
-    if (method === 'ws_open') {
-      const openData = data as { protocol?: string; extensions?: string };
-      this._readyState = 1; // OPEN
-      this._protocol = openData.protocol || '';
-      this._extensions = openData.extensions || '';
-      this.emit('open');
-    }
-
-    if (method === 'ws_message') {
-      const msgData = data as { messageType: number; data: Buffer };
-      // messageType: 1 = text, 2 = binary
-      const messageData = msgData.data;
-      const isBinary = msgData.messageType === 2;
-
-      this.emit('message', messageData, isBinary);
-    }
-
-    if (method === 'ws_close') {
-      const closeData = data as { code?: number; reason?: string };
-      this._readyState = 3; // CLOSED
-      this.emit('close', closeData.code || 1000, closeData.reason || '');
-    }
-
-    if (method === 'ws_error') {
-      const errorData = data as { statusCode: number; message: string };
-      const error: CycleTLSError = new Error(errorData.message || 'WebSocket error');
-      error.code = errorData.statusCode;
-      this.emit('error', error);
-    }
-
-    if (method === 'error') {
-      const errorData = data as { statusCode: number; message: string };
-      this._readyState = 3; // CLOSED
-      const error: CycleTLSError = new Error(errorData.message || 'Connection error');
-      error.code = errorData.statusCode;
-      this.emit('error', error);
-    }
-
-    if (method === 'end') {
-      if (this._readyState !== 3) {
+    switch (method) {
+      case 'response': {
+        const responseData = data as ResponseMetadata;
+        this.responseStatus = responseData.statusCode;
+        this.responseHeaders = responseData.headers;
+        break;
+      }
+      case 'ws_open': {
+        const openData = data as { protocol?: string; extensions?: string };
+        this._readyState = 1; // OPEN
+        this._protocol = openData.protocol || '';
+        this._extensions = openData.extensions || '';
+        this.emit('open');
+        break;
+      }
+      case 'ws_message': {
+        const msgData = data as { messageType: number; data: Buffer };
+        this.emit('message', msgData.data, msgData.messageType === 2);
+        break;
+      }
+      case 'ws_close': {
+        const closeData = data as { code?: number; reason?: string };
         this._readyState = 3; // CLOSED
-        this.emit('close', 1000, 'Connection ended');
+        this.emit('close', closeData.code || 1000, closeData.reason || '');
+        break;
+      }
+      case 'ws_error': {
+        const errorData = data as { statusCode: number; message: string };
+        const error: CycleTLSError = new Error(errorData.message || 'WebSocket error');
+        error.code = errorData.statusCode;
+        this.emit('error', error);
+        break;
+      }
+      case 'error': {
+        const errorData = data as { statusCode: number; message: string };
+        this._readyState = 3; // CLOSED
+        const error: CycleTLSError = new Error(errorData.message || 'Connection error');
+        error.code = errorData.statusCode;
+        this.emit('error', error);
+        break;
+      }
+      case 'end': {
+        if (this._readyState !== 3) {
+          this._readyState = 3; // CLOSED
+          this.emit('close', 1000, 'Connection ended');
+        }
+        break;
       }
     }
   }
@@ -1167,27 +1154,54 @@ class CycleTLSWebSocket extends EventEmitter {
   }
 }
 
+// Default JA3 fingerprint for Chrome
+const DEFAULT_JA3 = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49162-49161-49171-49172-51-57-47-53-10,0-23-65281-10-11-35-16-5-51-43-13-45-28-21,29-23-24-25-256-257,0";
+
+// Default User-Agent string
+const DEFAULT_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.54 Safari/537.36";
+
+// Apply default fingerprinting options to request options
+function applyDefaultOptions(options: CycleTLSRequestOptions): void {
+  // Set default fingerprinting options - prefer JA3 if multiple options are provided
+  if (!options.ja3 && !options.ja4r && !options.http2Fingerprint && !options.quicFingerprint) {
+    options.ja3 = DEFAULT_JA3;
+  }
+
+  // Set default user agent
+  if (!options.userAgent) {
+    options.userAgent = DEFAULT_USER_AGENT;
+  }
+
+  // Convert simple cookies to Cookie array
+  const cookies = options.cookies;
+  if (typeof cookies === "object" && !Array.isArray(cookies) && cookies !== null) {
+    const tempArr: SimpleCookie[] = [];
+    for (const [key, value] of Object.entries(cookies)) {
+      tempArr.push({ name: key, value: value });
+    }
+    options.cookies = tempArr;
+  }
+}
+
 // Represents an individual client connection to a SharedInstance
 class CycleTLSClientImpl extends EventEmitter {
   private sharedInstance: SharedInstance;
   private clientId: string;
   private connectionsByHost: Map<string, boolean> = new Map();
-  
+
   constructor(sharedInstance: SharedInstance) {
     super();
     this.sharedInstance = sharedInstance;
     this.clientId = `client-${Date.now()}-${Math.floor(10000 * Math.random())}`;
-    
+
     // Register this client with the shared instance
     this.sharedInstance.addClient(this.clientId, this);
-    
+
     // Listen for shared instance closure
     this.on('sharedInstanceClosed', () => {
       this.removeAllListeners();
     });
   }
-
-
 
   async request(
     url: string,
@@ -1200,46 +1214,21 @@ class CycleTLSClientImpl extends EventEmitter {
 
     const requestId = `${this.clientId}#${url}#${Date.now()}-${Math.floor(1000 * Math.random())}`;
 
-    //set default options
-    options ??= {}
+    // Ensure options object exists
+    options ??= {};
 
-    // Set default fingerprinting options - prefer JA3 if multiple options are provided
-    if (!options?.ja3 && !options?.ja4r && !options?.http2Fingerprint && !options?.quicFingerprint) {
-      options.ja3 = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49162-49161-49171-49172-51-57-47-53-10,0-23-65281-10-11-35-16-5-51-43-13-45-28-21,29-23-24-25-256-257,0";
-    }
-    
-    // Set default user agent
-    if (!options?.userAgent) {
-      options.userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.54 Safari/537.36";
-    }
+    // Apply default fingerprinting and user agent options
+    applyDefaultOptions(options);
 
     // Set default request options
-    if (!options?.body) options.body = "";
-    if (!options?.proxy) options.proxy = "";
-    if (!options?.insecureSkipVerify) options.insecureSkipVerify = false;
+    if (!options.body) options.body = "";
+    if (!options.proxy) options.proxy = "";
+    if (!options.insecureSkipVerify) options.insecureSkipVerify = false;
     if (options.enableConnectionReuse === undefined) options.enableConnectionReuse = true;
-    if (!options?.forceHTTP1) options.forceHTTP1 = false;
-    if (!options?.forceHTTP3) options.forceHTTP3 = false;
-    if (!options?.responseType) options.responseType = 'json';
-    if (!options?.protocol) {
-      // Default to standard HTTP protocol
-      options.protocol = ""; // Empty string means standard HTTP/HTTPS
-    }
-
-    //convert simple cookies
-    const cookies = options?.cookies;
-
-    if (typeof cookies === "object" && !Array.isArray(cookies) && cookies !== null) {
-      const tempArr: SimpleCookie[] = [];
-
-      for (const [key, value] of Object.entries(options.cookies!)) {
-        tempArr.push({ name: key, value: value });
-      }
-
-      options.cookies = tempArr;
-    }
-    
-
+    if (!options.forceHTTP1) options.forceHTTP1 = false;
+    if (!options.forceHTTP3) options.forceHTTP3 = false;
+    if (!options.responseType) options.responseType = 'json';
+    if (!options.protocol) options.protocol = "";
 
     // Track if we've connected to this host before for connection reuse
     const hasExistingConnection = this.connectionsByHost.has(hostKey);
@@ -1473,24 +1462,8 @@ class CycleTLSClientImpl extends EventEmitter {
 
     const requestId = `${this.clientId}#${url}#${Date.now()}-${Math.floor(1000 * Math.random())}`;
 
-    // Set default options
-    if (!options.ja3 && !options.ja4r && !options.http2Fingerprint && !options.quicFingerprint) {
-      options.ja3 = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49162-49161-49171-49172-51-57-47-53-10,0-23-65281-10-11-35-16-5-51-43-13-45-28-21,29-23-24-25-256-257,0";
-    }
-
-    if (!options.userAgent) {
-      options.userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.54 Safari/537.36";
-    }
-
-    // Convert simple cookies
-    const cookies = options.cookies;
-    if (typeof cookies === "object" && !Array.isArray(cookies) && cookies !== null) {
-      const tempArr: SimpleCookie[] = [];
-      for (const [key, value] of Object.entries(cookies)) {
-        tempArr.push({ name: key, value: value });
-      }
-      options.cookies = tempArr;
-    }
+    // Apply default fingerprinting and user agent options
+    applyDefaultOptions(options);
 
     // Create WebSocket instance
     const ws = new CycleTLSWebSocket(this.sharedInstance, requestId, url);
@@ -1562,21 +1535,6 @@ const globalCleanup = async () => {
 process.once("SIGINT", globalCleanup);
 process.once("SIGTERM", globalCleanup);
 process.once("beforeExit", globalCleanup);
-
-// Function to convert a stream into a string
-async function streamToString(stream: Readable): Promise<string> {
-  const chunks: Buffer[] = [];
-  await pipeline(
-    stream,
-    new Writable({
-      write(chunk: Buffer, encoding: BufferEncoding, callback: (error?: Error | null) => void) {
-        chunks.push(chunk);
-        callback();
-      }
-    })
-  );
-  return Buffer.concat(chunks).toString('utf8');
-}
 
 // Utility function to convert stream to buffer
 async function streamToBuffer(stream: Readable): Promise<Buffer> {

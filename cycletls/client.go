@@ -84,15 +84,13 @@ var disabledRedirect = func(req *fhttp.Request, via []*fhttp.Request) error {
 }
 
 func clientBuilder(browser Browser, dialer proxy.ContextDialer, timeout int, disableRedirect bool) fhttp.Client {
-	//if timeout is not set in call default to 15
 	if timeout == 0 {
-		timeout = 15
+		timeout = 15 // default timeout
 	}
 	client := fhttp.Client{
 		Transport: newRoundTripper(browser, dialer),
 		Timeout:   time.Duration(timeout) * time.Second,
 	}
-	//if disableRedirect is set to true httpclient will not redirect
 	if disableRedirect {
 		client.CheckRedirect = disabledRedirect
 	}

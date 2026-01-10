@@ -358,247 +358,118 @@ func (rt *roundTripper) dialTLS(ctx context.Context, network, addr string) (net.
 		return conn, nil
 	}
 
-	// Create appropriate transport based on negotiated protocol
-	now := time.Now()
-	switch conn.ConnectionState().NegotiatedProtocol {
-	case http2.NextProtoTLS:
-		// HTTP/2 transport
-		parsedUserAgent := parseUserAgent(rt.UserAgent)
-
-		// Use HTTP/2 fingerprint if specified
-		var http2Transport http2.Transport
-		if rt.HTTP2Fingerprint != "" {
-			// Parse and apply HTTP/2 fingerprint
-			h2Fingerprint, err := NewHTTP2Fingerprint(rt.HTTP2Fingerprint)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse HTTP/2 fingerprint: %v", err)
-			}
-
-			http2Transport = http2.Transport{
-				DialTLS:     rt.dialTLSHTTP2,
-				PushHandler: &http2.DefaultPushHandler{},
-				Navigator:   parsedUserAgent.UserAgent,
-			}
-
-			// Apply HTTP/2 fingerprint settings
-			h2Fingerprint.Apply(&http2Transport)
-		} else {
-			http2Transport = http2.Transport{
-				DialTLS:     rt.dialTLSHTTP2,
-				PushHandler: &http2.DefaultPushHandler{},
-				Navigator:   parsedUserAgent.UserAgent,
-			}
-		}
-
-		rt.cacheMu.Lock()
-		rt.cachedTransports[addr] = &cachedTransport{
-			transport: &http2Transport,
-			lastUsed:  now,
-		}
-		rt.cacheMu.Unlock()
-	default:
-		// HTTP/1.x transport - enable keep-alives with proper idle timeout settings
-		rt.cacheMu.Lock()
-		rt.cachedTransports[addr] = &cachedTransport{
-			transport: &http.Transport{
-				DialTLSContext:      rt.dialTLS,
-				DisableKeepAlives:   false,
-				IdleConnTimeout:     90 * time.Second,
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-			},
-			lastUsed: now,
-		}
-		rt.cacheMu.Unlock()
+	// Cache transport and connection
+	if err := rt.cacheTransportAndConnection(addr, conn, time.Now()); err != nil {
+		return nil, err
 	}
-
-	// Cache the connection for future use
-	rt.cacheMu.Lock()
-	rt.cachedConnections[addr] = &cachedConn{
-		conn:     conn,
-		lastUsed: now,
-	}
-	rt.cacheMu.Unlock()
 
 	return nil, errProtocolNegotiated
 }
 
 // retryWithTLS13CompatibleCurves retries the TLS connection with TLS 1.3 compatible curves
 func (rt *roundTripper) retryWithTLS13CompatibleCurves(ctx context.Context, network, addr, host string) (net.Conn, error) {
-	// Establish raw connection for retry
 	rawConn, err := rt.dialer.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}
 
-	var spec *utls.ClientHelloSpec
-
 	// Use TLS 1.3 compatible spec based on the original fingerprint type
-	if rt.QUICFingerprint != "" {
-		// For QUIC, we'll use the original spec but this could be enhanced
+	var spec *utls.ClientHelloSpec
+	switch {
+	case rt.QUICFingerprint != "":
 		spec, err = QUICStringToSpec(rt.QUICFingerprint, rt.UserAgent, rt.ForceHTTP1)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create QUIC spec for TLS 1.3 retry: %v", err)
-		}
-	} else if rt.JA3 != "" {
-		// Use TLS 1.3 compatible JA3 spec
+	case rt.JA3 != "":
 		spec, err = StringToTLS13CompatibleSpec(rt.JA3, rt.UserAgent, rt.ForceHTTP1)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create TLS 1.3 compatible JA3 spec: %v", err)
-		}
-	} else if rt.JA4r != "" {
-		// For JA4r, we'll use a fallback to default Chrome with TLS 1.3 compatible curves
+	default:
+		// For JA4r or default, use TLS 1.3 compatible Chrome fingerprint
 		spec, err = StringToTLS13CompatibleSpec(DefaultChrome_JA3, rt.UserAgent, rt.ForceHTTP1)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create TLS 1.3 compatible JA4 fallback spec: %v", err)
-		}
-	} else {
-		// Default to TLS 1.3 compatible Chrome fingerprint
-		spec, err = StringToTLS13CompatibleSpec(DefaultChrome_JA3, rt.UserAgent, rt.ForceHTTP1)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create TLS 1.3 compatible default spec: %v", err)
-		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create TLS 1.3 compatible spec: %v", err)
 	}
 
-	// Create TLS client for retry
 	conn := utls.UClient(rawConn, &utls.Config{
 		ServerName:         host,
 		OmitEmptyPsk:       true,
 		InsecureSkipVerify: rt.InsecureSkipVerify,
 	}, utls.HelloCustom)
 
-	// Apply TLS 1.3 compatible fingerprint
 	if err := conn.ApplyPreset(spec); err != nil {
 		return nil, fmt.Errorf("failed to apply TLS 1.3 compatible preset: %v", err)
 	}
 
-	// Perform TLS handshake for retry
 	if err = conn.Handshake(); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("TLS 1.3 compatible handshake failed: %+v", err)
 	}
 
-	// Create appropriate transport based on negotiated protocol
-	now := time.Now()
-	switch conn.ConnectionState().NegotiatedProtocol {
-	case http2.NextProtoTLS:
-		// HTTP/2 transport
-		parsedUserAgent := parseUserAgent(rt.UserAgent)
-
-		var http2Transport http2.Transport
-		if rt.HTTP2Fingerprint != "" {
-			h2Fingerprint, err := NewHTTP2Fingerprint(rt.HTTP2Fingerprint)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse HTTP/2 fingerprint for TLS 1.3 retry: %v", err)
-			}
-
-			http2Transport = http2.Transport{
-				DialTLS:     rt.dialTLSHTTP2,
-				PushHandler: &http2.DefaultPushHandler{},
-				Navigator:   parsedUserAgent.UserAgent,
-			}
-
-			h2Fingerprint.Apply(&http2Transport)
-		} else {
-			http2Transport = http2.Transport{
-				DialTLS:     rt.dialTLSHTTP2,
-				PushHandler: &http2.DefaultPushHandler{},
-				Navigator:   parsedUserAgent.UserAgent,
-			}
-		}
-
-		rt.cacheMu.Lock()
-		rt.cachedTransports[addr] = &cachedTransport{
-			transport: &http2Transport,
-			lastUsed:  now,
-		}
-		rt.cacheMu.Unlock()
-	default:
-		// HTTP/1.x transport - enable keep-alives with proper idle timeout settings
-		rt.cacheMu.Lock()
-		rt.cachedTransports[addr] = &cachedTransport{
-			transport: &http.Transport{
-				DialTLSContext:      rt.dialTLS,
-				DisableKeepAlives:   false,
-				IdleConnTimeout:     90 * time.Second,
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-			},
-			lastUsed: now,
-		}
-		rt.cacheMu.Unlock()
+	if err := rt.cacheTransportAndConnection(addr, conn, time.Now()); err != nil {
+		return nil, err
 	}
-
-	// Cache the successful TLS 1.3 connection
-	rt.cacheMu.Lock()
-	rt.cachedConnections[addr] = &cachedConn{
-		conn:     conn,
-		lastUsed: now,
-	}
-	rt.cacheMu.Unlock()
 
 	return nil, errProtocolNegotiated
 }
 
 // retryWithOriginalTLS12JA3 retries the TLS connection with the original TLS 1.2 JA3
 func (rt *roundTripper) retryWithOriginalTLS12JA3(ctx context.Context, network, addr, host string) (net.Conn, error) {
-	// Establish raw connection for fallback to original TLS 1.2 JA3
 	rawConn, err := rt.dialer.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}
 
-	// Use original TLS 1.2 JA3 spec (no upgrade)
 	spec, err := StringToSpec(rt.JA3, rt.UserAgent, rt.ForceHTTP1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create original TLS 1.2 JA3 spec: %v", err)
 	}
 
-	// Create TLS client for fallback
 	conn := utls.UClient(rawConn, &utls.Config{
 		ServerName:         host,
 		OmitEmptyPsk:       true,
 		InsecureSkipVerify: rt.InsecureSkipVerify,
 	}, utls.HelloCustom)
 
-	// Apply original TLS 1.2 fingerprint
 	if err := conn.ApplyPreset(spec); err != nil {
 		return nil, fmt.Errorf("failed to apply original TLS 1.2 preset: %v", err)
 	}
 
-	// Perform TLS handshake for fallback
 	if err = conn.Handshake(); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("original TLS 1.2 handshake failed: %+v", err)
 	}
 
+	if err := rt.cacheTransportAndConnection(addr, conn, time.Now()); err != nil {
+		return nil, err
+	}
+
+	return nil, errProtocolNegotiated
+}
+
+func (rt *roundTripper) dialTLSHTTP2(network, addr string, _ *utls.Config) (net.Conn, error) {
+	return rt.dialTLS(context.Background(), network, addr)
+}
+
+// cacheTransportAndConnection creates and caches the appropriate transport based on negotiated protocol.
+// This consolidates duplicate code from dialTLS, retryWithTLS13CompatibleCurves, and retryWithOriginalTLS12JA3.
+func (rt *roundTripper) cacheTransportAndConnection(addr string, conn *utls.UConn, now time.Time) error {
 	// Create appropriate transport based on negotiated protocol
-	now := time.Now()
 	switch conn.ConnectionState().NegotiatedProtocol {
 	case http2.NextProtoTLS:
 		// HTTP/2 transport
 		parsedUserAgent := parseUserAgent(rt.UserAgent)
 
-		var http2Transport http2.Transport
+		http2Transport := http2.Transport{
+			DialTLS:     rt.dialTLSHTTP2,
+			PushHandler: &http2.DefaultPushHandler{},
+			Navigator:   parsedUserAgent.UserAgent,
+		}
+
+		// Apply HTTP/2 fingerprint if specified
 		if rt.HTTP2Fingerprint != "" {
 			h2Fingerprint, err := NewHTTP2Fingerprint(rt.HTTP2Fingerprint)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse HTTP/2 fingerprint for TLS 1.2 fallback: %v", err)
+				return fmt.Errorf("failed to parse HTTP/2 fingerprint: %v", err)
 			}
-
-			http2Transport = http2.Transport{
-				DialTLS:     rt.dialTLSHTTP2,
-				PushHandler: &http2.DefaultPushHandler{},
-				Navigator:   parsedUserAgent.UserAgent,
-			}
-
 			h2Fingerprint.Apply(&http2Transport)
-		} else {
-			http2Transport = http2.Transport{
-				DialTLS:     rt.dialTLSHTTP2,
-				PushHandler: &http2.DefaultPushHandler{},
-				Navigator:   parsedUserAgent.UserAgent,
-			}
 		}
 
 		rt.cacheMu.Lock()
@@ -608,7 +479,7 @@ func (rt *roundTripper) retryWithOriginalTLS12JA3(ctx context.Context, network, 
 		}
 		rt.cacheMu.Unlock()
 	default:
-		// HTTP/1.x transport - enable keep-alives with proper idle timeout settings
+		// HTTP/1.x transport with keep-alives
 		rt.cacheMu.Lock()
 		rt.cachedTransports[addr] = &cachedTransport{
 			transport: &http.Transport{
@@ -623,7 +494,7 @@ func (rt *roundTripper) retryWithOriginalTLS12JA3(ctx context.Context, network, 
 		rt.cacheMu.Unlock()
 	}
 
-	// Cache the successful TLS 1.2 fallback connection
+	// Cache the connection
 	rt.cacheMu.Lock()
 	rt.cachedConnections[addr] = &cachedConn{
 		conn:     conn,
@@ -631,11 +502,7 @@ func (rt *roundTripper) retryWithOriginalTLS12JA3(ctx context.Context, network, 
 	}
 	rt.cacheMu.Unlock()
 
-	return nil, errProtocolNegotiated
-}
-
-func (rt *roundTripper) dialTLSHTTP2(network, addr string, _ *utls.Config) (net.Conn, error) {
-	return rt.dialTLS(context.Background(), network, addr)
+	return nil
 }
 
 func (rt *roundTripper) getDialTLSAddr(req *http.Request) string {

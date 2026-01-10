@@ -115,61 +115,47 @@ type WebSocketCommand struct {
 // activeWebSockets is now managed by the state package
 // Use state.RegisterWebSocket, state.GetWebSocket, state.UnregisterWebSocket
 
+// browserFromOptions creates a Browser configuration from request options
+func browserFromOptions(opts Options) Browser {
+	return Browser{
+		JA3:                opts.Ja3,
+		JA4r:               opts.Ja4r,
+		HTTP2Fingerprint:   opts.HTTP2Fingerprint,
+		QUICFingerprint:    opts.QUICFingerprint,
+		DisableGrease:      opts.DisableGrease,
+		UserAgent:          opts.UserAgent,
+		ServerName:         opts.ServerName,
+		Cookies:            opts.Cookies,
+		InsecureSkipVerify: opts.InsecureSkipVerify,
+		ForceHTTP1:         opts.ForceHTTP1,
+		ForceHTTP3:         opts.ForceHTTP3,
+		TLS13AutoRetry:     opts.TLS13AutoRetry,
+		HeaderOrder:        opts.HeaderOrder,
+	}
+}
+
 // ready Request
 func processRequest(request cycleTLSRequest) (result fullRequest) {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	var browser = Browser{
-		// TLS fingerprinting options
-		JA3:              request.Options.Ja3,
-		JA4r:             request.Options.Ja4r,
-		HTTP2Fingerprint: request.Options.HTTP2Fingerprint,
-		QUICFingerprint:  request.Options.QUICFingerprint,
-		DisableGrease:    request.Options.DisableGrease,
-
-		// Browser identification
-		UserAgent: request.Options.UserAgent,
-
-		// Connection options
-		ServerName:         request.Options.ServerName,
-		Cookies:            request.Options.Cookies,
-		InsecureSkipVerify: request.Options.InsecureSkipVerify,
-		ForceHTTP1:         request.Options.ForceHTTP1,
-		ForceHTTP3:         request.Options.ForceHTTP3,
-
-		// TLS 1.3 specific options
-		TLS13AutoRetry: request.Options.TLS13AutoRetry,
-
-		// Header ordering
-		HeaderOrder: request.Options.HeaderOrder,
-	}
-
-	// Handle protocol-specific clients
-	if request.Options.Protocol == "websocket" {
-		// WebSocket requests are handled separately
+	// Handle protocol-specific clients first (they build their own browser config)
+	switch {
+	case request.Options.Protocol == "websocket":
 		return dispatchWebSocketRequest(request)
-	} else if request.Options.Protocol == "sse" {
-		// SSE requests are handled separately
+	case request.Options.Protocol == "sse":
 		return dispatchSSERequest(request)
-	} else if request.Options.Protocol == "http3" || request.Options.ForceHTTP3 {
-		// HTTP/3 requests are handled separately and will be implemented later
-		// HTTP/3 requests are now supported
+	case request.Options.Protocol == "http3" || request.Options.ForceHTTP3:
 		return dispatchHTTP3Request(request)
 	}
 
-	// Default to true for connection reuse
-	enableConnectionReuse := true
-	if request.Options.EnableConnectionReuse == false {
-		// Only disable if explicitly set to false
-		enableConnectionReuse = false
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	browser := browserFromOptions(request.Options)
 
+	// Connection reuse is enabled by default
 	client, err := newClientWithReuse(
 		browser,
 		request.Options.Timeout,
 		request.Options.DisableRedirect,
 		request.Options.UserAgent,
-		enableConnectionReuse,
+		request.Options.EnableConnectionReuse != false,
 		request.Options.Proxy,
 	)
 	if err != nil {
@@ -283,45 +269,18 @@ func processRequest(request cycleTLSRequest) (result fullRequest) {
 func dispatchHTTP3Request(request cycleTLSRequest) (result fullRequest) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create browser configuration for HTTP/3
-	var browser = Browser{
-		// TLS fingerprinting options
-		JA3:              request.Options.Ja3,
-		JA4r:             request.Options.Ja4r,
-		HTTP2Fingerprint: request.Options.HTTP2Fingerprint,
-		QUICFingerprint:  request.Options.QUICFingerprint,
-		DisableGrease:    request.Options.DisableGrease,
+	// Create browser configuration for HTTP/3 with forced settings
+	browser := browserFromOptions(request.Options)
+	browser.ForceHTTP1 = false
+	browser.ForceHTTP3 = true
 
-		// Browser identification
-		UserAgent: request.Options.UserAgent,
-
-		// Connection options
-		ServerName:         request.Options.ServerName,
-		Cookies:            request.Options.Cookies,
-		InsecureSkipVerify: request.Options.InsecureSkipVerify,
-		ForceHTTP1:         false, // Force HTTP/3
-		ForceHTTP3:         true,  // Force HTTP/3
-
-		// TLS 1.3 specific options (HTTP/3 requires TLS 1.3)
-		TLS13AutoRetry: request.Options.TLS13AutoRetry,
-
-		// Header ordering
-		HeaderOrder: request.Options.HeaderOrder,
-	}
-
-	// Default to true for connection reuse
-	enableConnectionReuse := true
-	if request.Options.EnableConnectionReuse == false {
-		// Only disable if explicitly set to false
-		enableConnectionReuse = false
-	}
-
+	// Connection reuse is enabled by default
 	client, err := newClientWithReuse(
 		browser,
 		request.Options.Timeout,
 		request.Options.DisableRedirect,
 		request.Options.UserAgent,
-		enableConnectionReuse,
+		request.Options.EnableConnectionReuse != false,
 		request.Options.Proxy,
 	)
 	if err != nil {
@@ -370,46 +329,15 @@ func dispatchHTTP3Request(request cycleTLSRequest) (result fullRequest) {
 // dispatchSSERequest handles SSE specific request processing
 func dispatchSSERequest(request cycleTLSRequest) (result fullRequest) {
 	ctx, cancel := context.WithCancel(context.Background())
+	browser := browserFromOptions(request.Options)
 
-	// Create browser configuration for SSE
-	var browser = Browser{
-		// TLS fingerprinting options
-		JA3:              request.Options.Ja3,
-		JA4r:             request.Options.Ja4r,
-		HTTP2Fingerprint: request.Options.HTTP2Fingerprint,
-		QUICFingerprint:  request.Options.QUICFingerprint,
-		DisableGrease:    request.Options.DisableGrease,
-
-		// Browser identification
-		UserAgent: request.Options.UserAgent,
-
-		// Connection options
-		ServerName:         request.Options.ServerName,
-		Cookies:            request.Options.Cookies,
-		InsecureSkipVerify: request.Options.InsecureSkipVerify,
-		ForceHTTP1:         request.Options.ForceHTTP1,
-		ForceHTTP3:         request.Options.ForceHTTP3,
-
-		// TLS 1.3 specific options
-		TLS13AutoRetry: request.Options.TLS13AutoRetry,
-
-		// Header ordering
-		HeaderOrder: request.Options.HeaderOrder,
-	}
-
-	// Default to true for connection reuse
-	enableConnectionReuse := true
-	if request.Options.EnableConnectionReuse == false {
-		// Only disable if explicitly set to false
-		enableConnectionReuse = false
-	}
-
+	// Connection reuse is enabled by default
 	client, err := newClientWithReuse(
 		browser,
 		request.Options.Timeout,
 		request.Options.DisableRedirect,
 		request.Options.UserAgent,
-		enableConnectionReuse,
+		request.Options.EnableConnectionReuse != false,
 		request.Options.Proxy,
 	)
 	if err != nil {
@@ -445,35 +373,14 @@ func dispatchSSERequest(request cycleTLSRequest) (result fullRequest) {
 func dispatchWebSocketRequest(request cycleTLSRequest) (result fullRequest) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create browser configuration for WebSocket
-	var browser = Browser{
-		// TLS fingerprinting options
-		JA3:              request.Options.Ja3,
-		JA4r:             request.Options.Ja4r,
-		HTTP2Fingerprint: request.Options.HTTP2Fingerprint,
-		QUICFingerprint:  request.Options.QUICFingerprint,
-		DisableGrease:    request.Options.DisableGrease,
-
-		// Browser identification
-		UserAgent: request.Options.UserAgent,
-
-		// Connection options
-		Cookies:            request.Options.Cookies,
-		InsecureSkipVerify: request.Options.InsecureSkipVerify,
-		ForceHTTP1:         request.Options.ForceHTTP1,
-		ForceHTTP3:         false, // WebSocket doesn't support HTTP/3
-
-		// TLS 1.3 specific options
-		TLS13AutoRetry: request.Options.TLS13AutoRetry,
-
-		// Header ordering
-		HeaderOrder: request.Options.HeaderOrder,
-	}
+	// Create browser configuration for WebSocket (no HTTP/3 support)
+	browser := browserFromOptions(request.Options)
+	browser.ForceHTTP3 = false
 
 	// Get TLS config for WebSocket
 	tlsConfig := &utls.Config{
 		InsecureSkipVerify: browser.InsecureSkipVerify,
-		ServerName:         request.Options.ServerName,
+		ServerName:         browser.ServerName,
 	}
 
 	// Prepare headers for WebSocket
@@ -1584,20 +1491,13 @@ func (client CycleTLS) Do(URL string, options Options, Method string) (Response,
 	// Note: Don't automatically set HeaderOrder from UserAgent here as it can interfere with connection management
 	// The pseudo-header order should be set through explicit HTTP2Fingerprint or Options.HeaderOrder
 
-	// Create HTTP client with connection reuse
-	// Default to true for connection reuse
-	enableConnectionReuse := true
-	if options.EnableConnectionReuse == false {
-		// Only disable if explicitly set to false
-		enableConnectionReuse = false
-	}
-
+	// Create HTTP client with connection reuse enabled by default
 	httpClient, err := newClientWithReuse(
 		browser,
 		options.Timeout,
 		options.DisableRedirect,
 		options.UserAgent,
-		enableConnectionReuse,
+		options.EnableConnectionReuse != false,
 		options.Proxy,
 	)
 	if err != nil {
