@@ -3,6 +3,7 @@ package cycletls
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -1409,10 +1410,22 @@ func readSocket(chanRead chan fullRequest, wsSocket *websocket.Conn) {
 				case "ws_send":
 					cmd.Type = "send"
 					if dataStr, ok := baseMessage["data"].(string); ok {
-						cmd.Data = []byte(dataStr)
-					}
-					if isBinary, ok := baseMessage["isBinary"].(bool); ok {
-						cmd.IsBinary = isBinary
+						if isBinary, ok := baseMessage["isBinary"].(bool); ok && isBinary {
+							// TypeScript client base64-encodes binary data before sending via JSON
+							// We must decode it here to get the original binary bytes
+							decoded, err := base64.StdEncoding.DecodeString(dataStr)
+							if err != nil {
+								log.Printf("Failed to decode base64 data for ws_send: %v", err)
+								cmd.Data = []byte(dataStr) // Fallback to raw string
+							} else {
+								cmd.Data = decoded
+							}
+							cmd.IsBinary = true
+						} else {
+							// Text message - use as-is
+							cmd.Data = []byte(dataStr)
+							cmd.IsBinary = false
+						}
 					}
 
 				case "ws_close":
@@ -1516,13 +1529,26 @@ func WSEndpoint(w nhttp.ResponseWriter, r *nhttp.Request) {
 		chanRead := make(chan fullRequest)
 		chanWrite := make(chan []byte)
 		safeWriter := newSafeChannelWriter(chanWrite)
+		done := make(chan struct{})
 
-		go readSocket(chanRead, ws)
+		// Start readSocket in goroutine; when it returns, signal shutdown
+		go func() {
+			readSocket(chanRead, ws)
+			close(done)
+			close(chanRead)
+		}()
+
 		go readProcess(chanRead, safeWriter)
 
-		// Run as main thread - when this exits, mark channel as closed
+		// Goroutine to close chanWrite when readSocket exits, allowing writeSocket to unblock
+		go func() {
+			<-done
+			safeWriter.setClosed()
+			close(chanWrite)
+		}()
+
+		// Run as main thread - exits when chanWrite is closed
 		writeSocket(chanWrite, ws)
-		safeWriter.setClosed()
 	}
 }
 

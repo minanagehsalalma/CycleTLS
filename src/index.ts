@@ -415,11 +415,14 @@ class InstanceManager {
 
     // Start initialization
     const initPromise = (async () => {
-      const sharedInstance = new SharedInstance(port, debug, timeout, executablePath);
-      await sharedInstance.initialize();
-      this.sharedInstances.set(port, sharedInstance);
-      this.initializingPromises.delete(port);
-      return sharedInstance;
+      try {
+        const sharedInstance = new SharedInstance(port, debug, timeout, executablePath);
+        await sharedInstance.initialize();
+        this.sharedInstances.set(port, sharedInstance);
+        return sharedInstance;
+      } finally {
+        this.initializingPromises.delete(port);
+      }
     })();
 
     this.initializingPromises.set(port, initPromise);
@@ -439,6 +442,22 @@ class InstanceManager {
     await Promise.all(cleanupPromises);
     this.sharedInstances.clear();
   }
+
+  // Testing accessors - allows tests to verify internal state
+  /** @internal For testing only - check if a port has a pending initialization promise */
+  _hasInitializingPromise(port: number): boolean {
+    return this.initializingPromises.has(port);
+  }
+
+  /** @internal For testing only - get the count of initializing promises */
+  _getInitializingPromisesCount(): number {
+    return this.initializingPromises.size;
+  }
+
+  /** @internal For testing only - reset the singleton instance */
+  static _resetInstance(): void {
+    InstanceManager.instance = undefined as unknown as InstanceManager;
+  }
 }
 
 // Manages one Go server process and multiple TypeScript client connections
@@ -455,6 +474,7 @@ class SharedInstance extends EventEmitter {
   private failedInitialization: boolean = false;
   private isShuttingDown: boolean = false;
   private httpServer: http.Server | null = null;
+  private initializationReject: ((reason: string) => void) | null = null;
 
   constructor(port: number, debug: boolean, timeout: number, executablePath?: string) {
     super();
@@ -464,8 +484,16 @@ class SharedInstance extends EventEmitter {
     this.executablePath = executablePath;
   }
 
+  private rejectInitialization(reason: string): void {
+    if (this.initializationReject) {
+      this.initializationReject(reason);
+      this.initializationReject = null;
+    }
+  }
+
   async initialize(): Promise<void> {
     return new Promise((resolve, reject) => {
+      this.initializationReject = reject;
       this.checkSpawnedInstance(resolve, reject);
     });
   }
@@ -516,7 +544,7 @@ class SharedInstance extends EventEmitter {
 
     const executableFilename = PLATFORM_BINARIES[process.platform]?.[os.arch()];
     if (!executableFilename) {
-      this.cleanExit(new Error(`Unsupported architecture ${os.arch()} for ${process.platform}`));
+      this.rejectInitialization(`Unsupported architecture: ${process.platform}-${os.arch()}`);
       return;
     }
 
@@ -591,13 +619,13 @@ class SharedInstance extends EventEmitter {
           console.error(`Executable not found at: ${execPath}`);
           console.error('Please ensure the executable exists and has correct permissions');
         }
-        throw error;
+        this.rejectInitialization(error.message);
       });
 
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       console.error(`Error in handleSpawn: ${err.message}`);
-      throw err;
+      this.rejectInitialization(err.message);
     }
   }
 
@@ -1890,6 +1918,9 @@ export { CycleTLSWebSocketV2 as StreamingWebSocket };
 // Legacy API for backward compatibility
 export { initCycleTLS };
 
+// Internal exports for testing
+export { InstanceManager as _InstanceManager };
+
 // CommonJS compatibility
 module.exports = CycleTLS;
 module.exports.default = CycleTLS;
@@ -1898,4 +1929,5 @@ module.exports.CycleTLSWebSocket = CycleTLSWebSocket;
 module.exports.CycleTLSWebSocketV2 = CycleTLSWebSocketV2;
 module.exports.StreamingWebSocket = CycleTLSWebSocketV2;
 module.exports.initCycleTLS = initCycleTLS;
+module.exports._InstanceManager = InstanceManager;
 module.exports.__esModule = true;

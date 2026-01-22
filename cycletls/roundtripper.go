@@ -16,6 +16,7 @@ import (
 	stdhttp "net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -772,30 +773,79 @@ func (rt *roundTripper) makeHTTP3Request(req *http.Request, conn *HTTP3Connectio
 		tlsConfig.ServerName = rt.ServerName
 	}
 
-	// Create HTTP/3 Transport with connection pooling enabled
-	h3Transport := &http3.Transport{
-		TLSClientConfig: tlsConfig,
-		QUICConfig: &quic.Config{
-			HandshakeIdleTimeout:           30 * time.Second,
-			MaxIdleTimeout:                 90 * time.Second,
-			KeepAlivePeriod:                15 * time.Second,
-			InitialStreamReceiveWindow:     512 * 1024,      // 512 KB
-			MaxStreamReceiveWindow:         2 * 1024 * 1024, // 2 MB
-			InitialConnectionReceiveWindow: 1024 * 1024,     // 1 MB
-			MaxConnectionReceiveWindow:     4 * 1024 * 1024, // 4 MB
-			MaxIncomingStreams:             100,
-			MaxIncomingUniStreams:          100,
-			EnableDatagrams:                false,
-			DisablePathMTUDiscovery:        false,
-			Allow0RTT:                      false,
-		},
+	quicConfig := &quic.Config{
+		HandshakeIdleTimeout:           30 * time.Second,
+		MaxIdleTimeout:                 90 * time.Second,
+		KeepAlivePeriod:                15 * time.Second,
+		InitialStreamReceiveWindow:     512 * 1024,      // 512 KB
+		MaxStreamReceiveWindow:         2 * 1024 * 1024, // 2 MB
+		InitialConnectionReceiveWindow: 1024 * 1024,     // 1 MB
+		MaxConnectionReceiveWindow:     4 * 1024 * 1024, // 4 MB
+		MaxIncomingStreams:             100,
+		MaxIncomingUniStreams:          100,
+		EnableDatagrams:                false,
+		DisablePathMTUDiscovery:        false,
+		Allow0RTT:                      false,
+	}
+
+	var h3Transport *http3.Transport
+
+	// Handle connection based on type to avoid leaking pre-dialed connections
+	if !conn.IsUQuic {
+		// Standard QUIC: wire the pre-dialed connection into the transport
+		// The Dial function returns the pre-dialed connection on first call,
+		// then falls back to creating new connections for subsequent calls
+		var connUsed int32
+		preDialedConn, ok := conn.QuicConn.(*quic.Conn)
+		if ok && preDialedConn != nil {
+			h3Transport = &http3.Transport{
+				TLSClientConfig: tlsConfig,
+				QUICConfig:      quicConfig,
+				Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+					// Use atomic to ensure we only use the pre-dialed connection once
+					if atomic.AddInt32(&connUsed, 1) == 1 {
+						return preDialedConn, nil
+					}
+					// For subsequent connections (e.g., reconnects), dial normally
+					// Parse the address to get host and port
+					udpAddr, err := net.ResolveUDPAddr("udp", addr)
+					if err != nil {
+						return nil, err
+					}
+					udpConn, err := net.ListenPacket("udp", "")
+					if err != nil {
+						return nil, err
+					}
+					return quic.DialEarly(ctx, udpConn, udpAddr, tlsCfg, cfg)
+				},
+			}
+		} else {
+			// Fallback: no valid pre-dialed connection, let transport manage its own
+			// Close the unused connection to prevent leak
+			rt.closeHTTP3Connection(conn)
+			conn = nil
+			h3Transport = &http3.Transport{
+				TLSClientConfig: tlsConfig,
+				QUICConfig:      quicConfig,
+			}
+		}
+	} else {
+		// UQuic connection: http3.Transport cannot use uquic.EarlyConnection
+		// Close the pre-dialed connection to prevent leak - the fingerprinting
+		// happened during the dial phase, but http3.Transport will create its own connection
+		rt.closeHTTP3Connection(conn)
+		conn = nil
+		h3Transport = &http3.Transport{
+			TLSClientConfig: tlsConfig,
+			QUICConfig:      quicConfig,
+		}
 	}
 
 	// Cache the HTTP/3 transport for future requests
 	rt.cacheMu.Lock()
 	rt.cachedHTTP3Transports[cacheKey] = &cachedHTTP3Transport{
 		transport: h3Transport,
-		conn:      conn,
+		conn:      conn, // nil for UQuic, actual conn for standard QUIC
 		lastUsed:  time.Now(),
 	}
 	rt.cacheMu.Unlock()
