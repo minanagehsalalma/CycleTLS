@@ -61,10 +61,38 @@ jobs:
         working-directory: ./cycletls
         run: go build -v ./...
 
-      - name: Start SOCKS Proxy (only on ubuntu)
+      - name: Start SOCKS Proxy (Ubuntu)
         if: matrix.platform == 'ubuntu-latest'
         run: |
           docker run -d -p 9050:9050 dperson/torproxy
+          # Wait for proxy to be ready
+          for i in {1..30}; do
+            if nc -z 127.0.0.1 9050 2>/dev/null; then
+              echo "SOCKS proxy is ready on port 9050"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Start SOCKS Proxy (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          # Download pre-built gost binary (faster than brew install)
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "arm64" ]; then
+            curl -sL https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_darwin_arm64.tar.gz | tar xz
+          else
+            curl -sL https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_darwin_amd64.tar.gz | tar xz
+          fi
+          nohup ./gost -L socks5://127.0.0.1:9050 > /tmp/gost.log 2>&1 &
+          # Wait for proxy to be ready
+          for i in {1..30}; do
+            if nc -z 127.0.0.1 9050 2>/dev/null; then
+              echo "SOCKS proxy is ready on port 9050"
+              break
+            fi
+            sleep 1
+          done
 
       - name: Integration Tests (excluding tlsfingerprint)
         working-directory: ./cycletls

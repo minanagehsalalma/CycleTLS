@@ -8,5 +8,6 @@ tests/images/source*
 .serena/*
 .claude/
 thoughts/
+.tldr/
 # Continuous Claude cache (local only)
 .claude/cache/

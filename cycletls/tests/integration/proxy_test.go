@@ -28,8 +28,8 @@ func waitForProxy(addr string, timeout time.Duration) error {
 }
 
 func TestProxySuccess(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Skipping this test on non-linux platforms")
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping proxy test on Windows - no SOCKS proxy in CI")
 		return
 	}
 
@@ -55,8 +55,9 @@ func TestProxySuccess(t *testing.T) {
 	log.Print("Body: " + resp.Body)
 }
 func TestSocks4Proxy(t *testing.T) {
+	// SOCKS4 only supported on Linux (microsocks on macOS doesn't support SOCKS4)
 	if runtime.GOOS != "linux" {
-		t.Skip("Skipping this test on non-linux platforms")
+		t.Skip("Skipping SOCKS4 test - only supported on Linux")
 		return
 	}
 
@@ -84,8 +85,8 @@ func TestSocks4Proxy(t *testing.T) {
 }
 
 func TestSocks5hProxy(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Skipping this test on non-linux platforms")
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping proxy test on Windows - no SOCKS proxy in CI")
 		return
 	}
 
