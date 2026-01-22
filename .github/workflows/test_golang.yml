@@ -64,7 +64,9 @@ jobs:
       - name: Start SOCKS Proxy (Ubuntu)
         if: matrix.platform == 'ubuntu-latest'
         run: |
-          docker run -d -p 9050:9050 dperson/torproxy
+          # Download pre-built gost binary (simple SOCKS5 proxy, faster than Tor)
+          curl -sL https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_linux_amd64.tar.gz | tar xz
+          nohup ./gost -L socks5://127.0.0.1:9050 > /tmp/gost.log 2>&1 &
           # Wait for proxy to be ready
           for i in {1..30}; do
             if nc -z 127.0.0.1 9050 2>/dev/null; then
