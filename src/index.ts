@@ -485,6 +485,7 @@ class SharedInstance extends EventEmitter {
   }
 
   private rejectInitialization(reason: string): void {
+    this.failedInitialization = true;
     if (this.initializationReject) {
       this.initializationReject(reason);
       this.initializationReject = null;
@@ -508,8 +509,11 @@ class SharedInstance extends EventEmitter {
         this.httpServer!.removeAllListeners();
         this.httpServer = null;
         this.spawnServer();
-        this.isHost = true;
-        this.createClient(resolve, reject);
+        // Only proceed with client creation if spawn didn't fail
+        if (!this.failedInitialization && this.initializationReject) {
+          this.isHost = true;
+          this.createClient(resolve, reject);
+        }
       });
     });
 

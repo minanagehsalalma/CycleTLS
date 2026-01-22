@@ -143,14 +143,27 @@ describe("InstanceManager initializingPromises cleanup", () => {
  * spawnServer() and handleSpawn() error handlers.
  */
 describe("InstanceManager failure cleanup", () => {
+  let localInstanceManager: InstanceType<typeof InstanceManager>;
+
+  afterEach(async () => {
+    // Clean up the local instance manager created in each test
+    if (localInstanceManager) {
+      try {
+        await localInstanceManager.cleanup();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
+  });
+
   test("should remove promise from initializingPromises after failed initialization", async () => {
     InstanceManager._resetInstance();
-    const instanceManager = InstanceManager.getInstance();
+    localInstanceManager = InstanceManager.getInstance();
     const port = 9210;
     const invalidExecutablePath = "/nonexistent/path/to/cycletls";
 
     // Start initialization with invalid path - this should fail
-    const initPromise = instanceManager.getOrCreateSharedInstance(
+    const initPromise = localInstanceManager.getOrCreateSharedInstance(
       port,
       false,
       5000,
@@ -161,19 +174,19 @@ describe("InstanceManager failure cleanup", () => {
     await expect(initPromise).rejects.toMatch(/Executable not found|not found/i);
 
     // After failure, promise should be removed from initializingPromises
-    expect(instanceManager._hasInitializingPromise(port)).toBe(false);
+    expect(localInstanceManager._hasInitializingPromise(port)).toBe(false);
   });
 
   test("should reject immediately on spawn error, not wait for timeout", async () => {
     InstanceManager._resetInstance();
-    const instanceManager = InstanceManager.getInstance();
+    localInstanceManager = InstanceManager.getInstance();
     const port = 9211;
     const invalidExecutablePath = "/nonexistent/path/to/cycletls";
 
     const startTime = Date.now();
 
     // Start initialization with invalid path and long timeout
-    const initPromise = instanceManager.getOrCreateSharedInstance(
+    const initPromise = localInstanceManager.getOrCreateSharedInstance(
       port,
       false,
       30000, // 30 second timeout - we should NOT wait this long

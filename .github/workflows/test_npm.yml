@@ -1,4 +1,4 @@
-name: "🧪 Node Tests"
+name: "🧪 Node.js Tests"
 
 on: [pull_request]
 
@@ -6,8 +6,8 @@ env:
   GITHUB_HASH: $(git rev-parse --short "$GITHUB_SHA")
 
 jobs:
-  existing-tests:
-    name: Existing Tests (Non-Blocking)
+  node-integration:
+    name: Node.js Integration (soft-fail)
     strategy:
       matrix:
         node-version: [20.x]
@@ -38,12 +38,12 @@ jobs:
         run: npm ci
         working-directory: ./
 
-      - name: Run Existing Tests (excluding tlsfingerprint)
+      - name: Run Integration Tests
         run: npm test -- --testPathIgnorePatterns=tlsfingerprint
         working-directory: ./
 
-  tlsfingerprint-tests:
-    name: TLS Fingerprint Tests (Blocking)
+  node-tls-fingerprint:
+    name: Node.js TLS Fingerprint
     strategy:
       matrix:
         node-version: [20.x]
