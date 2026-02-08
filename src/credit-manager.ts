@@ -67,7 +67,7 @@ export class CreditManager {
    * Flush any accumulated bytes as credits immediately.
    */
   flush(): void {
-    if (this.bytesReceived > 0) {
+    if (!this.paused && this.bytesReceived > 0) {
       this.sendCredits(this.bytesReceived);
       this.bytesReceived = 0;
     }

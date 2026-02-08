@@ -38,24 +38,22 @@ func newSafeChannelWriter(ch chan []byte) *safeChannelWriter {
 	}
 }
 
-// write safely writes data to the channel, returning false if channel is closed
+// write safely writes data to the channel, returning false if channel is closed.
+// Uses exclusive Lock and non-blocking select to prevent race between check and send.
 func (scw *safeChannelWriter) write(data []byte) bool {
-	scw.mu.RLock()
-	defer scw.mu.RUnlock()
+	scw.mu.Lock()
+	defer scw.mu.Unlock()
 
 	if scw.closed {
 		return false
 	}
 
-	// Use defer/recover to handle panics from closed channel
-	defer func() {
-		if r := recover(); r != nil {
-			debugLogger.Printf("Recovered from panic writing to channel: %v", r)
-		}
-	}()
-
-	scw.ch <- data
-	return true
+	select {
+	case scw.ch <- data:
+		return true
+	default:
+		return false
+	}
 }
 
 // close marks the channel as closed (does not actually close it to avoid double-close panics)
@@ -514,10 +512,15 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 		}
 	}()
 
+	// Ensure context cancellation cleanup for ALL paths (HTTP, SSE, WebSocket)
+	if res.cancel != nil {
+		defer res.cancel()
+	}
+
 	// Check for early errors (URL parsing, etc.)
 	if res.err != nil {
+		state.UnregisterRequest(res.options.RequestID)
 		b := getBuffer()
-		defer putBuffer(b)
 		requestIDLength := len(res.options.RequestID)
 		statusCode := 400
 
@@ -537,26 +540,25 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 		b.WriteByte(byte(messageLength))
 		b.WriteString(message)
 
-		if !chanWrite.write(b.Bytes()) {
+		data := make([]byte, b.Len())
+		copy(data, b.Bytes())
+		putBuffer(b)
+		if !chanWrite.write(data) {
 			debugLogger.Printf("Failed to write error response for request %s: channel closed", res.options.RequestID)
 		}
 		return
 	}
 
-	// Handle SSE connections
+	// Handle SSE connections (dispatchSSEAsync handles its own UnregisterRequest)
 	if res.sseClient != nil {
 		dispatchSSEAsync(res, chanWrite)
 		return
 	}
 
-	// Handle WebSocket connections
+	// Handle WebSocket connections (dispatchWebSocketAsync handles its own UnregisterRequest)
 	if res.wsClient != nil {
 		dispatchWebSocketAsync(res, chanWrite)
 		return
-	}
-
-	if res.cancel != nil {
-		defer res.cancel()
 	}
 
 	defer func() {
@@ -589,6 +591,12 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 	resp, err := doRequestWithHeaderTimeout(res.ctx, res.cancel, res.client, res.req, timeout)
 
 	if err != nil {
+		// Close response body on error path - Go http.Client can return
+		// a non-nil Response alongside an error (e.g., redirect failures).
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+
 		parsedError := parseError(err)
 
 		{
@@ -611,10 +619,12 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 			b.WriteByte(byte(messageLength))
 			b.WriteString(message)
 
-			if !chanWrite.write(b.Bytes()) {
+			data := make([]byte, b.Len())
+			copy(data, b.Bytes())
+			putBuffer(b)
+			if !chanWrite.write(data) {
 				debugLogger.Printf("Failed to write error response for request %s: channel closed", res.options.RequestID)
 			}
-			putBuffer(b)
 		}
 
 		return
@@ -670,12 +680,13 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 			}
 		}
 
-		if !chanWrite.write(b.Bytes()) {
+		data := make([]byte, b.Len())
+		copy(data, b.Bytes())
+		putBuffer(b)
+		if !chanWrite.write(data) {
 			debugLogger.Printf("Failed to write to channel: channel closed")
-			putBuffer(b)
 			return
 		}
-		putBuffer(b)
 	}
 
 	{
@@ -722,12 +733,13 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 					b.WriteByte(byte(messageLength))
 					b.WriteString(message)
 
-					if !chanWrite.write(b.Bytes()) {
+					data := make([]byte, b.Len())
+					copy(data, b.Bytes())
+					putBuffer(b)
+					if !chanWrite.write(data) {
 						debugLogger.Printf("Failed to write to channel: channel closed")
-						putBuffer(b)
 						return
 					}
-					putBuffer(b)
 					break loop
 				}
 
@@ -750,12 +762,13 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 						b.WriteByte(byte(bodyChunkLength))
 						b.Write(chunkBuffer[:n])
 
-						if !chanWrite.write(b.Bytes()) {
+						data := make([]byte, b.Len())
+						copy(data, b.Bytes())
+						putBuffer(b)
+						if !chanWrite.write(data) {
 							debugLogger.Printf("Failed to write to channel: channel closed")
-							putBuffer(b)
 							return
 						}
-						putBuffer(b)
 					}
 					// EOF reached, exit the loop
 					break loop
@@ -782,12 +795,13 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 				b.WriteByte(byte(bodyChunkLength))
 				b.Write(chunkBuffer[:n])
 
-				if !chanWrite.write(b.Bytes()) {
+				data := make([]byte, b.Len())
+				copy(data, b.Bytes())
+				putBuffer(b)
+				if !chanWrite.write(data) {
 					debugLogger.Printf("Failed to write to channel: channel closed")
-					putBuffer(b)
 					return
 				}
-				putBuffer(b)
 			}
 		}
 	}
@@ -803,12 +817,13 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 		b.WriteByte(3)
 		b.WriteString("end")
 
-		if !chanWrite.write(b.Bytes()) {
+		data := make([]byte, b.Len())
+		copy(data, b.Bytes())
+		putBuffer(b)
+		if !chanWrite.write(data) {
 			debugLogger.Printf("Failed to write to channel: channel closed")
-			putBuffer(b)
 			return
 		}
-		putBuffer(b)
 	}
 }
 
@@ -845,12 +860,13 @@ func dispatchSSEAsync(res fullRequest, chanWrite *safeChannelWriter) {
 		b.WriteByte(byte(messageLength))
 		b.WriteString(message)
 
-		if !chanWrite.write(b.Bytes()) {
+		data := make([]byte, b.Len())
+		copy(data, b.Bytes())
+		putBuffer(b)
+		if !chanWrite.write(data) {
 			debugLogger.Printf("Failed to write to channel: channel closed")
-			putBuffer(b)
 			return
 		}
-		putBuffer(b)
 		return
 	}
 	defer sseResp.Close()
@@ -899,12 +915,13 @@ func dispatchSSEAsync(res fullRequest, chanWrite *safeChannelWriter) {
 			}
 		}
 
-		if !chanWrite.write(b.Bytes()) {
+		data := make([]byte, b.Len())
+		copy(data, b.Bytes())
+		putBuffer(b)
+		if !chanWrite.write(data) {
 			debugLogger.Printf("Failed to write to channel: channel closed")
-			putBuffer(b)
 			return
 		}
-		putBuffer(b)
 	}
 
 	// Read SSE events
@@ -960,12 +977,13 @@ func dispatchSSEAsync(res fullRequest, chanWrite *safeChannelWriter) {
 			b.WriteByte(byte(bodyChunkLength))
 			b.Write(eventBytes)
 
-			if !chanWrite.write(b.Bytes()) {
+			data := make([]byte, b.Len())
+			copy(data, b.Bytes())
+			putBuffer(b)
+			if !chanWrite.write(data) {
 				debugLogger.Printf("Failed to write to channel: channel closed")
-				putBuffer(b)
 				return
 			}
-			putBuffer(b)
 		}
 	}
 
@@ -981,12 +999,13 @@ func dispatchSSEAsync(res fullRequest, chanWrite *safeChannelWriter) {
 		b.WriteByte(3)
 		b.WriteString("end")
 
-		if !chanWrite.write(b.Bytes()) {
+		data := make([]byte, b.Len())
+		copy(data, b.Bytes())
+		putBuffer(b)
+		if !chanWrite.write(data) {
 			debugLogger.Printf("Failed to write to channel: channel closed")
-			putBuffer(b)
 			return
 		}
-		putBuffer(b)
 	}
 }
 
@@ -1179,7 +1198,6 @@ func dispatchWebSocketAsync(res fullRequest, chanWrite *safeChannelWriter) {
 // Helper functions for sending WebSocket messages
 func sendWebSocketError(chanWrite *safeChannelWriter, requestID, _ string, resp *nhttp.Response, err error) {
 	b := getBuffer()
-	defer putBuffer(b)
 	requestIDLength := len(requestID)
 
 	b.WriteByte(byte(requestIDLength >> 8))
@@ -1204,12 +1222,14 @@ func sendWebSocketError(chanWrite *safeChannelWriter, requestID, _ string, resp 
 	b.WriteByte(byte(messageLength))
 	b.WriteString(message)
 
-	chanWrite.write(b.Bytes())
+	data := make([]byte, b.Len())
+	copy(data, b.Bytes())
+	putBuffer(b)
+	chanWrite.write(data)
 }
 
 func sendWebSocketResponse(chanWrite *safeChannelWriter, requestID, url string, resp *nhttp.Response) {
 	b := getBuffer()
-	defer putBuffer(b)
 	headerLength := len(resp.Header)
 	requestIDLength := len(requestID)
 	finalUrlLength := len(url)
@@ -1251,7 +1271,10 @@ func sendWebSocketResponse(chanWrite *safeChannelWriter, requestID, url string, 
 		}
 	}
 
-	chanWrite.write(b.Bytes())
+	data := make([]byte, b.Len())
+	copy(data, b.Bytes())
+	putBuffer(b)
+	chanWrite.write(data)
 }
 
 func sendWebSocketOpen(chanWrite *safeChannelWriter, requestID, protocol, extensions string) {
@@ -1264,7 +1287,6 @@ func sendWebSocketOpen(chanWrite *safeChannelWriter, requestID, protocol, extens
 	msgBytes, _ := json.Marshal(openMsg)
 
 	b := getBuffer()
-	defer putBuffer(b)
 	requestIDLength := len(requestID)
 	bodyChunkLength := len(msgBytes)
 
@@ -1280,12 +1302,14 @@ func sendWebSocketOpen(chanWrite *safeChannelWriter, requestID, protocol, extens
 	b.WriteByte(byte(bodyChunkLength))
 	b.Write(msgBytes)
 
-	chanWrite.write(b.Bytes())
+	data := make([]byte, b.Len())
+	copy(data, b.Bytes())
+	putBuffer(b)
+	chanWrite.write(data)
 }
 
 func sendWebSocketMessage(chanWrite *safeChannelWriter, requestID string, messageType int, message []byte) {
 	b := getBuffer()
-	defer putBuffer(b)
 	requestIDLength := len(requestID)
 
 	b.WriteByte(byte(requestIDLength >> 8))
@@ -1308,7 +1332,10 @@ func sendWebSocketMessage(chanWrite *safeChannelWriter, requestID string, messag
 	// Message data
 	b.Write(message)
 
-	chanWrite.write(b.Bytes())
+	data := make([]byte, b.Len())
+	copy(data, b.Bytes())
+	putBuffer(b)
+	chanWrite.write(data)
 }
 
 func sendWebSocketClose(chanWrite *safeChannelWriter, requestID string, code int, reason string) {
@@ -1321,7 +1348,6 @@ func sendWebSocketClose(chanWrite *safeChannelWriter, requestID string, code int
 	msgBytes, _ := json.Marshal(closeMsg)
 
 	b := getBuffer()
-	defer putBuffer(b)
 	requestIDLength := len(requestID)
 	bodyChunkLength := len(msgBytes)
 
@@ -1337,12 +1363,14 @@ func sendWebSocketClose(chanWrite *safeChannelWriter, requestID string, code int
 	b.WriteByte(byte(bodyChunkLength))
 	b.Write(msgBytes)
 
-	chanWrite.write(b.Bytes())
+	data := make([]byte, b.Len())
+	copy(data, b.Bytes())
+	putBuffer(b)
+	chanWrite.write(data)
 }
 
 func sendWebSocketEnd(chanWrite *safeChannelWriter, requestID string) {
 	b := getBuffer()
-	defer putBuffer(b)
 	requestIDLength := len(requestID)
 
 	b.WriteByte(byte(requestIDLength >> 8))
@@ -1352,7 +1380,10 @@ func sendWebSocketEnd(chanWrite *safeChannelWriter, requestID string) {
 	b.WriteByte(3)
 	b.WriteString("end")
 
-	chanWrite.write(b.Bytes())
+	data := make([]byte, b.Len())
+	copy(data, b.Bytes())
+	putBuffer(b)
+	chanWrite.write(data)
 }
 
 func writeSocket(chanWrite chan []byte, wsSocket *websocket.Conn) {
@@ -1402,7 +1433,11 @@ func readSocket(chanRead chan fullRequest, wsSocket *websocket.Conn) {
 					debugLogger.Printf("WebSocket connection not found for request ID: %s", requestId)
 					continue
 				}
-				wsConn := wsConnInterface.(*WebSocketConnection)
+				wsConn, ok := wsConnInterface.(*WebSocketConnection)
+				if !ok {
+					debugLogger.Printf("Invalid WebSocket connection type for request ID: %s", requestId)
+					continue
+				}
 
 				cmd := WebSocketCommand{}
 
@@ -1616,13 +1651,10 @@ func (client CycleTLS) Close() {
 // Do creates a single HTTP request for integration tests
 func (client CycleTLS) Do(URL string, options Options, Method string) (Response, error) {
 	totalTimeout := timeoutSeconds(options.Timeout)
-	var ctx context.Context
-	var cancel context.CancelFunc
-	if totalTimeout > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), totalTimeout)
-	} else {
-		ctx, cancel = context.WithCancel(context.Background())
-	}
+	// Use WithCancel (not WithTimeout) - doRequestWithHeaderTimeout handles
+	// the timeout via its own timer. Using WithTimeout here would create a
+	// second cancel path, causing a double-cancel race.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Create browser from options
@@ -1693,9 +1725,19 @@ func (client CycleTLS) Do(URL string, options Options, Method string) (Response,
 	}
 	defer resp.Body.Close()
 
-	// Read body
+	// Read body with timeout - cancel context if body read exceeds timeout.
+	// doRequestWithHeaderTimeout only covers header arrival; we need a
+	// separate timer to bound the total body read time.
+	if totalTimeout > 0 {
+		bodyTimer := time.AfterFunc(totalTimeout, cancel)
+		defer bodyTimer.Stop()
+	}
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
+		// When context was canceled by our body timer, treat as timeout
+		if err == context.Canceled && totalTimeout > 0 {
+			err = context.DeadlineExceeded
+		}
 		parsedError := parseError(err)
 		if parsedError.StatusCode != 0 {
 			return Response{

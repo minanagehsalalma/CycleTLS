@@ -1,7 +1,7 @@
 # CycleTLS Changelog
 
 
-## 2.0.6 - (11-3-2025)
+## 2.0.6 - (2026-02-07)
 
 ### New Features
 - **Modern Streaming Protocol** - Credit-based flow control for memory-efficient large file downloads
@@ -38,6 +38,45 @@
   - Go: Enhanced `CloseIdleConnections` method with nil checks and synchronized cleanup of connection and transport caches
   - Performance: Connection reuse now provides 2-3x improvement for repeated requests (first: ~800ms, subsequent: ~350ms)
   - Added comprehensive test coverage: `test_issue_407.js` (Node.js) and `issue_407_connection_reuse_test.go` (Go integration tests with 50 concurrent request stress test)
+
+### Security & Safety Fixes (2026-02-07)
+- **Removed 18MB binary artifact** (`src/src`) from repository and added to `.gitignore` - eliminates supply chain risk
+- **Fixed race condition in safeChannelWriter** - Changed RLock to exclusive Lock with non-blocking select send; removed panic/recover anti-pattern
+- **Fixed buffer pool data corruption** - Buffer data is now copied before returning to pool across all 18 usage sites; prevents intermittent data corruption when channel consumer reads after pool reclaim
+- **Fixed unchecked type assertion** - WebSocket connection lookup now uses comma-ok pattern instead of bare assertion that could panic
+- **Eliminated FNV hash collision risk** - Client pool keys now use full config string instead of 64-bit FNV-1a hash; prevents wrong TLS client reuse on hash collision
+- **Fixed context leak for SSE/WebSocket** - Moved `defer cancel()` and `defer state.UnregisterRequest()` before early returns in `dispatcherAsync`; SSE and WebSocket requests previously leaked contexts
+- **Fixed HTTP response body leak** - Added `resp.Body.Close()` on error path after `doRequestWithHeaderTimeout`
+- **Added 10MB max size validation to packet reader** - `ReadBytes(n)` now rejects allocations over 10MB to prevent OOM from malformed packets
+- **Eliminated double context cancel in Client.Do** - Replaced redundant `context.WithTimeout` with `context.WithCancel`; `doRequestWithHeaderTimeout` is now sole timeout authority
+- **Fixed WebSocket event listener memory leak** (TypeScript) - Added `ws.removeAllListeners()` on close for `request()`, `ws()`, and `sse()` methods
+- **Fixed zombie process on early rejection** (TypeScript) - `rejectInitialization()` now kills child process before rejecting
+- **Fixed pid undefined panic** (TypeScript) - All `this.child.pid!` non-null assertions replaced with undefined checks
+- **Fixed HTTP server async close race** (TypeScript) - `createClient()` now called inside `httpServer.close()` callback
+- **Fixed buffer overread in protocol parser** (TypeScript) - All `parseXxxPayload` functions and `BufferReader.readString()` now validate length prefixes against buffer size
+- **Fixed CreditManager.flush() ignoring pause** (TypeScript) - `flush()` now respects paused state for proper backpressure
+- **Fixed WebSocket error after resolution** (TypeScript) - Errors after promise resolution now propagate to `bodyStream.destroy(err)` instead of being silently dropped
+
+### New Tests (2026-02-07)
+- `cycletls/tests/unit/safe_channel_writer_test.go` - 4 tests for concurrent write+close safety
+- `cycletls/tests/unit/buffer_pool_test.go` - 3 tests including corruption detection
+- `cycletls/tests/unit/type_assertion_test.go` - 2 tests for safe type assertion pattern
+- `cycletls/tests/unit/client_key_test.go` - 3 tests for client key generation
+- `cycletls/packet_reader_test.go` - 3 tests for bounds validation
+- `tests/memory-leak.test.ts` - 5 tests for listener cleanup
+- `tests/zombie-process.test.ts` - 3 tests for process cleanup
+- `tests/pid-safety.test.ts` - 3 tests for pid validation
+- `tests/async-close-race.test.ts` - 2 tests for server close ordering
+- `tests/instanceManager.test.ts` - 2 additional race condition tests
+- `tests/protocol.test.ts` - 12 tests for buffer validation
+- `tests/credit-manager.test.ts` - 4 tests for pause/resume/flush
+- `tests/ws-error-propagation.test.ts` - 1 test for error forwarding
+
+### Documentation Cleanup
+- Removed duplicate JA4R sections in README
+- Updated README examples to use `response.json()` / `response.text()` helpers
+- Removed stale internal docs: `LOCAL_CHANGES.md`, `WEBSOCKET_IMPLEMENTATION_SUMMARY.md`
+- Fixed changelog date from November 2025 to February 2026
 
 ### Enhancements
 - Improved error handling and logging for WebSocket channel operations

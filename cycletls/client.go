@@ -3,7 +3,6 @@ package cycletls
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"sync"
 	"time"
 
@@ -168,10 +167,10 @@ func generateClientKey(browser Browser, timeout int, disableRedirect bool, proxy
 		cookieStr,
 	)
 
-	// Generate FNV-1a hash for the key (faster than SHA256 for cache keys)
-	h := fnv.New64a()
-	h.Write([]byte(configStr))
-	return fmt.Sprintf("%x", h.Sum64())
+	// Use the full config string as the key - map string lookups are already
+	// fast and this eliminates any hash collision risk that could cause wrong
+	// TLS client reuse.
+	return configStr
 }
 
 // getOrCreateClient retrieves a client from the pool or creates a new one

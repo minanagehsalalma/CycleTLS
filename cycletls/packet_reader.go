@@ -20,6 +20,13 @@ var ErrStringTooLarge = errors.New("packet: string length exceeds limit")
 // ErrNegativeLength is returned when a negative length is encountered.
 var ErrNegativeLength = errors.New("packet: negative length")
 
+// MaxReadBytes defines the maximum allowed size for ReadBytes (10 MB).
+// This prevents unbounded memory allocation from malformed packets.
+const MaxReadBytes = 10 * 1024 * 1024
+
+// ErrBytesTooLarge is returned when a ReadBytes length exceeds MaxReadBytes.
+var ErrBytesTooLarge = errors.New("packet: read bytes length exceeds 10MB limit")
+
 // Reader allows sequential reading of typed values from a binary buffer.
 //
 // IMPORTANT:
@@ -118,6 +125,10 @@ func (r *Reader) ReadBytes(n int) ([]byte, error) {
 
 	if n == 0 {
 		return []byte{}, nil
+	}
+
+	if n > MaxReadBytes {
+		return nil, ErrBytesTooLarge
 	}
 
 	if (r.pos + n) > len(r.data) {

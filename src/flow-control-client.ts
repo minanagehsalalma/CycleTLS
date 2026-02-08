@@ -848,6 +848,11 @@ export class CycleTLS extends EventEmitter {
             timeoutId = null;
           }
           reject(new CycleTLSError(err.message, 0, requestId));
+        } else {
+          // Propagate error to body stream if already resolved
+          if (bodyStream && !bodyStream.destroyed) {
+            bodyStream.destroy(err);
+          }
         }
       });
 
@@ -864,6 +869,8 @@ export class CycleTLS extends EventEmitter {
           }
           reject(new CycleTLSError("Connection closed", 0, requestId));
         }
+        // Clean up all WebSocket listeners to prevent memory leaks
+        ws.removeAllListeners();
       });
     });
   }
@@ -1134,6 +1141,8 @@ export class CycleTLS extends EventEmitter {
           clearTimeout(timeoutId);
           reject(new CycleTLSError("Connection closed", 0, requestId));
         }
+        // Clean up all WebSocket listeners to prevent memory leaks
+        wsClient.removeAllListeners();
       });
     });
   }
@@ -1482,6 +1491,8 @@ export class CycleTLS extends EventEmitter {
           clearTimeout(timeoutId);
           reject(new CycleTLSError("Connection closed", 0, requestId));
         }
+        // Clean up all WebSocket listeners to prevent memory leaks
+        ws.removeAllListeners();
       });
     });
   }

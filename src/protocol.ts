@@ -59,7 +59,7 @@ export function buildCreditPacket(requestId: string, credits: number): Buffer {
 /**
  * BufferReader simplifies parsing binary packets.
  */
-class BufferReader {
+export class BufferReader {
   private offset = 0;
 
   constructor(private data: Buffer) {}
@@ -78,6 +78,11 @@ class BufferReader {
 
   readString(): string {
     const len = this.readU16();
+    if (this.offset + len > this.data.length) {
+      throw new Error(
+        `String length ${len} exceeds remaining buffer ${this.data.length - this.offset}`
+      );
+    }
     const s = this.data.toString("utf8", this.offset, this.offset + len);
     this.offset += len;
     return s;
@@ -141,6 +146,11 @@ export function parseResponsePayload(payload: Buffer): ResponsePayload {
 export function parseDataPayload(payload: Buffer): Buffer {
   const r = new BufferReader(payload);
   const length = r.readU32();
+  if (4 + length > payload.length) {
+    throw new Error(
+      `Invalid data frame: length ${length} exceeds payload size ${payload.length - 4}`
+    );
+  }
   return payload.subarray(4, 4 + length);
 }
 
@@ -178,6 +188,11 @@ export interface WebSocketOpenPayload {
 export function parseWebSocketOpenPayload(payload: Buffer): WebSocketOpenPayload {
   // Read length prefix (4 bytes)
   const length = payload.readUInt32BE(0);
+  if (4 + length > payload.length) {
+    throw new Error(
+      `Invalid ws_open frame: length ${length} exceeds payload size ${payload.length - 4}`
+    );
+  }
   // Extract JSON data after the length prefix
   const jsonData = payload.subarray(4, 4 + length);
   const json = jsonData.toString("utf8");
@@ -207,6 +222,11 @@ export interface WebSocketMessagePayload {
 export function parseWebSocketMessagePayload(payload: Buffer): WebSocketMessagePayload {
   const messageType = payload.readUInt8(0);
   const length = payload.readUInt32BE(1);
+  if (5 + length > payload.length) {
+    throw new Error(
+      `Invalid ws_message frame: length ${length} exceeds payload size ${payload.length - 5}`
+    );
+  }
   const data = payload.subarray(5, 5 + length);
   return { messageType, data };
 }
@@ -226,6 +246,11 @@ export interface WebSocketClosePayload {
 export function parseWebSocketClosePayload(payload: Buffer): WebSocketClosePayload {
   // Read length prefix (4 bytes)
   const length = payload.readUInt32BE(0);
+  if (4 + length > payload.length) {
+    throw new Error(
+      `Invalid ws_close frame: length ${length} exceeds payload size ${payload.length - 4}`
+    );
+  }
   // Extract JSON data after the length prefix
   const jsonData = payload.subarray(4, 4 + length);
   const json = jsonData.toString("utf8");

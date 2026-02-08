@@ -3,13 +3,12 @@
 package cycletls
 
 import (
-	"encoding/hex"
 	"strings"
 	"testing"
 )
 
-// TestGenerateClientKey_ReturnsHexString verifies that generateClientKey returns a valid hex string
-func TestGenerateClientKey_ReturnsHexString(t *testing.T) {
+// TestGenerateClientKey_ReturnsConfigString verifies that generateClientKey returns the full config string
+func TestGenerateClientKey_ReturnsConfigString(t *testing.T) {
 	browser := Browser{
 		JA3:       "771,52244-52243-52245,0-23-35-13,23-24,0",
 		UserAgent: "Mozilla/5.0 Test",
@@ -17,10 +16,12 @@ func TestGenerateClientKey_ReturnsHexString(t *testing.T) {
 
 	key := generateClientKey(browser, 30, false, "")
 
-	// Verify it's a valid hex string
-	_, err := hex.DecodeString(key)
-	if err != nil {
-		t.Errorf("generateClientKey() returned invalid hex string: %s, error: %v", key, err)
+	// Verify it contains expected config fields
+	if !strings.Contains(key, "ja3:771,52244-52243-52245,0-23-35-13,23-24,0") {
+		t.Errorf("Key should contain JA3 value, got: %s", key)
+	}
+	if !strings.Contains(key, "ua:Mozilla/5.0 Test") {
+		t.Errorf("Key should contain UserAgent value, got: %s", key)
 	}
 }
 
@@ -84,7 +85,7 @@ func TestGenerateClientKey_DifferentOptionsDifferentKeys(t *testing.T) {
 	}
 }
 
-// TestGenerateClientKey_KeyFormatValid verifies key format is valid lowercase hex
+// TestGenerateClientKey_KeyFormatValid verifies key format contains expected fields
 func TestGenerateClientKey_KeyFormatValid(t *testing.T) {
 	browser := Browser{
 		JA3:       "test",
@@ -93,71 +94,38 @@ func TestGenerateClientKey_KeyFormatValid(t *testing.T) {
 
 	key := generateClientKey(browser, 30, false, "")
 
-	if key != strings.ToLower(key) {
-		t.Errorf("generateClientKey() should return lowercase hex, got: %s", key)
-	}
-
-	validHex := "0123456789abcdef"
-	for _, c := range key {
-		if !strings.ContainsRune(validHex, c) {
-			t.Errorf("generateClientKey() contains invalid hex character: %c", c)
+	// Key should contain pipe-separated config fields
+	requiredFields := []string{"ja3:", "ja4r:", "http2:", "ua:", "sni:", "proxy:", "redirect:", "skipverify:", "forcehttp1:", "forcehttp3:"}
+	for _, field := range requiredFields {
+		if !strings.Contains(key, field) {
+			t.Errorf("Key missing field %q, got: %s", field, key)
 		}
 	}
 }
 
-// TestGenerateClientKey_KeyLengthConsistent verifies key length is consistent (FNV-1a 64-bit = 16 hex chars)
-func TestGenerateClientKey_KeyLengthConsistent(t *testing.T) {
-	testCases := []struct {
-		name    string
-		browser Browser
-		timeout int
-		proxy   string
-	}{
-		{
-			name:    "empty browser",
-			browser: Browser{},
-			timeout: 0,
-			proxy:   "",
-		},
-		{
-			name: "minimal browser",
-			browser: Browser{
-				JA3: "test",
-			},
-			timeout: 30,
-			proxy:   "",
-		},
-		{
-			name: "full browser config",
-			browser: Browser{
-				JA3:                "771,52244-52243-52245,0-23-35-13,23-24,0",
-				JA4r:               "t13d1516h2_8daaf6152771_02713d6af862",
-				HTTP2Fingerprint:   "1:65536,2:0,3:1000,4:6291456,6:262144",
-				QUICFingerprint:    "quic_fingerprint_test",
-				UserAgent:          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-				ServerName:         "example.com",
-				InsecureSkipVerify: true,
-				ForceHTTP1:         true,
-				ForceHTTP3:         true,
-				Cookies: []Cookie{
-					{Name: "session", Value: "abc123"},
-					{Name: "token", Value: "xyz789"},
-				},
-			},
-			timeout: 120,
-			proxy:   "http://user:pass@proxy.example.com:8080",
-		},
+// TestGenerateClientKey_KeyLengthGrowsWithConfig verifies that longer configs produce longer keys
+func TestGenerateClientKey_KeyLengthGrowsWithConfig(t *testing.T) {
+	emptyBrowser := Browser{}
+	minimalBrowser := Browser{JA3: "test"}
+	fullBrowser := Browser{
+		JA3:              "771,52244-52243-52245,0-23-35-13,23-24,0",
+		JA4r:             "t13d1516h2_8daaf6152771_02713d6af862",
+		HTTP2Fingerprint: "1:65536,2:0,3:1000,4:6291456,6:262144",
+		UserAgent:        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 	}
 
-	expectedLength := 16 // FNV-1a 64-bit = 8 bytes = 16 hex chars
+	emptyKey := generateClientKey(emptyBrowser, 0, false, "")
+	minimalKey := generateClientKey(minimalBrowser, 30, false, "")
+	fullKey := generateClientKey(fullBrowser, 120, false, "http://proxy:8080")
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			key := generateClientKey(tc.browser, tc.timeout, false, tc.proxy)
-			if len(key) != expectedLength {
-				t.Errorf("generateClientKey() key length = %d, expected %d", len(key), expectedLength)
-			}
-		})
+	if len(emptyKey) == 0 {
+		t.Error("Empty browser key should not be empty")
+	}
+	if len(minimalKey) <= len(emptyKey) {
+		t.Error("Minimal browser key should be longer than empty browser key")
+	}
+	if len(fullKey) <= len(minimalKey) {
+		t.Error("Full browser key should be longer than minimal browser key")
 	}
 }
 
@@ -170,13 +138,12 @@ func TestGenerateClientKey_EmptyBrowser(t *testing.T) {
 		t.Error("generateClientKey() should not return empty string for empty browser")
 	}
 
-	_, err := hex.DecodeString(key)
-	if err != nil {
-		t.Errorf("generateClientKey() with empty browser returned invalid hex: %s", key)
+	// Should contain the field markers even with empty values
+	if !strings.Contains(key, "ja3:") {
+		t.Errorf("Empty browser key should still contain field markers, got: %s", key)
 	}
-
-	if len(key) != 16 {
-		t.Errorf("generateClientKey() with empty browser returned wrong length: %d", len(key))
+	if !strings.Contains(key, "redirect:false") {
+		t.Errorf("Empty browser key should contain redirect:false, got: %s", key)
 	}
 }
 

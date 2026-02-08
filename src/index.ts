@@ -413,7 +413,10 @@ class InstanceManager {
       return pending;
     }
 
-    // Start initialization
+    // Start initialization - IMPORTANT: The promise is created and stored in
+    // initializingPromises synchronously (before any await) to prevent race
+    // conditions. Since JS is single-threaded for synchronous code, no other
+    // call can interleave between the check above and the set below.
     const initPromise = (async () => {
       try {
         const sharedInstance = new SharedInstance(port, debug, timeout, executablePath);
@@ -486,6 +489,29 @@ class SharedInstance extends EventEmitter {
 
   private rejectInitialization(reason: string): void {
     this.failedInitialization = true;
+
+    // Kill child process if it exists to prevent zombie processes
+    if (this.child && this.child.pid !== undefined) {
+      try {
+        if (process.platform === "win32") {
+          this.child.kill('SIGKILL');
+        } else {
+          process.kill(-this.child.pid, 'SIGKILL');
+        }
+      } catch (e) {
+        // Process already dead - ignore
+      }
+      this.child = null;
+    } else if (this.child) {
+      // pid is undefined (process failed to spawn properly), try direct kill
+      try {
+        this.child.kill('SIGKILL');
+      } catch (e) {
+        // Process already dead - ignore
+      }
+      this.child = null;
+    }
+
     if (this.initializationReject) {
       this.initializationReject(reason);
       this.initializationReject = null;
@@ -518,20 +544,27 @@ class SharedInstance extends EventEmitter {
     });
 
     this.httpServer.once('error', (err) => {
-      // Ensure the HTTP server is closed if an error occurs
+      // Ensure the HTTP server is closed if an error occurs.
+      // IMPORTANT: createClient must be called INSIDE the close callback
+      // to avoid a race where the server still holds the port.
       if (this.httpServer) {
         try {
           this.httpServer.close(() => {
-            this.httpServer!.removeAllListeners();
+            this.httpServer?.removeAllListeners();
             this.httpServer = null;
+            this.createClient(resolve, reject);
+            this.isHost = false;
           });
         } catch (e) {
           console.error("Error closing server on error:", e);
           this.httpServer = null;
+          this.createClient(resolve, reject);
+          this.isHost = false;
         }
+      } else {
+        this.createClient(resolve, reject);
+        this.isHost = false;
       }
-      this.createClient(resolve, reject);
-      this.isHost = false;
     });
 
     // Start listening last so that the above listeners are in place
@@ -866,13 +899,20 @@ class SharedInstance extends EventEmitter {
         } catch (error) {
           console.error("Error killing Windows process:", error);
         }
-      } else {
+      } else if (this.child.pid !== undefined) {
         try {
-          process.kill(-this.child.pid!, 'SIGKILL');
+          process.kill(-this.child.pid, 'SIGKILL');
         } catch (error) {
           if ((error as any).code !== "ESRCH") {
             console.error("Error killing process:", error);
           }
+        }
+      } else {
+        // pid is undefined (process failed to spawn), fall back to direct kill
+        try {
+          this.child.kill('SIGKILL');
+        } catch (error) {
+          // Process already dead - ignore
         }
       }
     }
@@ -904,13 +944,20 @@ class SharedInstance extends EventEmitter {
         } catch (error) {
           console.error("Error killing Windows process:", error);
         }
-      } else {
+      } else if (this.child.pid !== undefined) {
         try {
-          process.kill(-this.child.pid!, 'SIGKILL');
+          process.kill(-this.child.pid, 'SIGKILL');
         } catch (error) {
           if ((error as any).code !== "ESRCH") {
             console.error("Error killing process:", error);
           }
+        }
+      } else {
+        // pid is undefined (process failed to spawn), fall back to direct kill
+        try {
+          this.child.kill('SIGKILL');
+        } catch (error) {
+          // Process already dead - ignore
         }
       }
       this.child = null;

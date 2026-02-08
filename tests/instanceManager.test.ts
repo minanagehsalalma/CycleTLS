@@ -135,6 +135,67 @@ describe("InstanceManager initializingPromises cleanup", () => {
   });
 });
 
+describe("InstanceManager race condition prevention", () => {
+  let instanceManager: InstanceType<typeof InstanceManager>;
+
+  beforeEach(() => {
+    InstanceManager._resetInstance();
+    instanceManager = InstanceManager.getInstance();
+  });
+
+  afterEach(async () => {
+    try {
+      await instanceManager.cleanup();
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+  });
+
+  test("concurrent calls to same port should return the same promise (no duplicate instances)", async () => {
+    const port = 9220;
+
+    // Call getOrCreateSharedInstance twice WITHOUT awaiting the first call.
+    // This simulates the race condition: two callers both check the map
+    // at nearly the same time. Because the promise is set synchronously
+    // (before any await), the second call should find the pending promise
+    // and return it rather than creating a duplicate instance.
+    const promise1 = instanceManager.getOrCreateSharedInstance(port, false, 10000);
+    const promise2 = instanceManager.getOrCreateSharedInstance(port, false, 10000);
+
+    // Only one initializing promise should exist (the second call reuses
+    // the first's pending promise). Note: the returned promises are different
+    // objects because async functions always wrap returns in a new promise,
+    // but they both resolve to the same SharedInstance.
+    expect(instanceManager._getInitializingPromisesCount()).toBe(1);
+
+    // Wait for both to complete
+    const [instance1, instance2] = await Promise.all([promise1, promise2]);
+
+    // Both should resolve to the same SharedInstance (no duplicate)
+    expect(instance1).toBe(instance2);
+
+    // Cleanup
+    await instanceManager.removeSharedInstance(port);
+  });
+
+  test("initializingPromises is set synchronously before any async work", () => {
+    const port = 9221;
+
+    // Before the call, no promise exists
+    expect(instanceManager._hasInitializingPromise(port)).toBe(false);
+
+    // Start initialization (don't await)
+    const promise = instanceManager.getOrCreateSharedInstance(port, false, 10000);
+
+    // Immediately after the synchronous call, the promise MUST be in the map.
+    // This is the key invariant that prevents race conditions.
+    expect(instanceManager._hasInitializingPromise(port)).toBe(true);
+
+    // Clean up - wait for the promise to settle
+    promise.then(() => instanceManager.removeSharedInstance(port)).catch(() => {});
+  });
+});
+
 /**
  * Test to verify the fix works with actual failure case.
  *

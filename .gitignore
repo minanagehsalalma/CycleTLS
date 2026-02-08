@@ -11,3 +11,6 @@ thoughts/
 .tldr/
 # Continuous Claude cache (local only)
 .claude/cache/
+
+# Binary artifacts
+src/src
