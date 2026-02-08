@@ -187,21 +187,18 @@ func getOrCreateClient(browser Browser, timeout int, disableRedirect bool, userA
 
 	clientKey := generateClientKey(browser, timeout, disableRedirect, proxy)
 
-	// Try to get existing client from pool (read-only check first)
-	advancedClientPoolMutex.RLock()
+	// Try to get existing client from pool
+	// Use a single Lock() for check-and-update to avoid TOCTOU race
+	// (RLock->RUnlock->Lock allows another goroutine to delete the entry between locks)
+	advancedClientPoolMutex.Lock()
 	entry, exists := advancedClientPool[clientKey]
 	if exists {
+		entry.LastUsed = time.Now()
 		client := entry.Client
-		advancedClientPoolMutex.RUnlock()
-		// Update last used time with write lock (separate from read)
-		advancedClientPoolMutex.Lock()
-		if entry, stillExists := advancedClientPool[clientKey]; stillExists {
-			entry.LastUsed = time.Now()
-		}
 		advancedClientPoolMutex.Unlock()
 		return client, nil
 	}
-	advancedClientPoolMutex.RUnlock()
+	advancedClientPoolMutex.Unlock()
 
 	// Create new client if not found in pool
 	advancedClientPoolMutex.Lock()

@@ -143,17 +143,16 @@ func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		http3CacheKey := "h3:" + net.JoinHostPort(host, port)
 
 		// Check for cached HTTP/3 transport
-		rt.cacheMu.RLock()
+		// Use a single Lock() for check-and-update to avoid TOCTOU race
+		rt.cacheMu.Lock()
 		cachedH3, hasCached := rt.cachedHTTP3Transports[http3CacheKey]
-		rt.cacheMu.RUnlock()
-
 		if hasCached {
-			// Update last used time and use cached transport
-			rt.cacheMu.Lock()
 			cachedH3.lastUsed = time.Now()
+			transport := cachedH3.transport
 			rt.cacheMu.Unlock()
-			return rt.makeHTTP3RequestWithTransport(req, cachedH3.transport)
+			return rt.makeHTTP3RequestWithTransport(req, transport)
 		}
+		rt.cacheMu.Unlock()
 
 		// No cached transport, need to create new connection
 		// Check for USpec (matches reference implementation logic)
@@ -177,9 +176,13 @@ func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// Use cached transport if available, otherwise create a new one
-	rt.cacheMu.RLock()
+	// Use a single Lock() for check-and-update to avoid TOCTOU race
+	rt.cacheMu.Lock()
 	ct, ok := rt.cachedTransports[addr]
-	rt.cacheMu.RUnlock()
+	if ok {
+		ct.lastUsed = time.Now()
+	}
+	rt.cacheMu.Unlock()
 
 	if !ok {
 		if err := rt.getTransport(req, addr); err != nil {
@@ -188,11 +191,6 @@ func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		rt.cacheMu.RLock()
 		ct = rt.cachedTransports[addr]
 		rt.cacheMu.RUnlock()
-	} else {
-		// Update last used time
-		rt.cacheMu.Lock()
-		ct.lastUsed = time.Now()
-		rt.cacheMu.Unlock()
 	}
 
 	// Perform the request
@@ -253,16 +251,15 @@ func (rt *roundTripper) dialTLS(ctx context.Context, network, addr string) (net.
 	defer rt.Unlock()
 
 	// Return cached connection if available
-	rt.cacheMu.RLock()
+	// Use a single Lock() for check-and-update to avoid TOCTOU race
+	// (RLock->RUnlock->Lock allows another goroutine to delete the entry between locks)
+	rt.cacheMu.Lock()
 	if cc := rt.cachedConnections[addr]; cc != nil {
-		rt.cacheMu.RUnlock()
-		// Update last used time
-		rt.cacheMu.Lock()
 		cc.lastUsed = time.Now()
 		rt.cacheMu.Unlock()
 		return cc.conn, nil
 	}
-	rt.cacheMu.RUnlock()
+	rt.cacheMu.Unlock()
 
 	// Establish raw connection
 	rawConn, err := rt.dialer.DialContext(ctx, network, addr)
@@ -721,9 +718,17 @@ func (rt *roundTripper) closeHTTP3Connection(conn *HTTP3Connection) {
 	}
 }
 
-// StopCacheCleanup stops the cache cleanup goroutine
+// StopCacheCleanup stops the cache cleanup goroutine.
+// Safe to call multiple times or when cleanup was never started.
 func (rt *roundTripper) StopCacheCleanup() {
-	if rt.cleanupStop != nil {
+	if rt.cleanupStop == nil {
+		return
+	}
+	// Use select to avoid panic on double-close
+	select {
+	case <-rt.cleanupStop:
+		// Already closed, nothing to do
+	default:
 		close(rt.cleanupStop)
 	}
 }
