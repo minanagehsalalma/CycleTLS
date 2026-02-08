@@ -477,9 +477,17 @@ class InstanceManager {
   }
 
   async cleanup(): Promise<void> {
+    // Wait for any pending initializations to complete (or fail) before cleanup
+    // to avoid leaving half-initialized instances as zombies
+    if (this.initializingPromises.size > 0) {
+      const pendingPromises = Array.from(this.initializingPromises.values());
+      await Promise.allSettled(pendingPromises);
+    }
+
     const cleanupPromises = Array.from(this.sharedInstances.values()).map(instance => instance.cleanup());
     await Promise.all(cleanupPromises);
     this.sharedInstances.clear();
+    this.initializingPromises.clear();
   }
 
   // Testing accessors - allows tests to verify internal state
@@ -526,6 +534,12 @@ class SharedInstance extends EventEmitter {
   private rejectInitialization(reason: string): void {
     this.failedInitialization = true;
 
+    // Clear connection timeout to prevent it from firing on an already-rejected promise
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
+
     // Kill child process if it exists to prevent zombie processes
     if (this.child) {
       forceKillProcess(this.child, true);
@@ -548,7 +562,9 @@ class SharedInstance extends EventEmitter {
   private checkSpawnedInstance(resolve: () => void, reject: (reason: string) => void): void {
     this.httpServer = http.createServer();
 
-    this.httpServer.once('listening', () => {
+    const onListening = () => {
+      // Remove the error listener since we succeeded
+      this.httpServer?.off('error', onError);
       // Close the HTTP server immediately after it starts listening
       this.httpServer!.close(() => {
         // Ensure all listeners are removed and server is nulled
@@ -561,12 +577,23 @@ class SharedInstance extends EventEmitter {
           this.createClient(resolve, reject);
         }
       });
-    });
+    };
 
-    this.httpServer.once('error', (err) => {
+    const onError = (err: Error) => {
+      // Remove the listening listener since we failed
+      this.httpServer?.off('listening', onListening);
+
       // Ensure the HTTP server is closed if an error occurs.
       // IMPORTANT: createClient must be called INSIDE the close callback
       // to avoid a race where the server still holds the port.
+
+      // Kill any spawned child process to prevent zombie processes
+      // when HTTP server fails after process was spawned
+      if (this.child) {
+        forceKillProcess(this.child, true);
+        this.child = null;
+      }
+
       if (this.httpServer) {
         try {
           this.httpServer.close(() => {
@@ -585,7 +612,10 @@ class SharedInstance extends EventEmitter {
         this.createClient(resolve, reject);
         this.isHost = false;
       }
-    });
+    };
+
+    this.httpServer.once('listening', onListening);
+    this.httpServer.once('error', onError);
 
     // Start listening last so that the above listeners are in place
     this.httpServer.listen(this.port);
@@ -610,6 +640,13 @@ class SharedInstance extends EventEmitter {
 
   private handleSpawn(fileName: string): void {
     try {
+      // Clean up old child process listeners before respawning to prevent leaks
+      if (this.child) {
+        this.child.stdout.removeAllListeners();
+        this.child.stderr.removeAllListeners();
+        this.child.removeAllListeners();
+      }
+
       // Determine the executable path
       let execPath: string;
 
@@ -637,13 +674,13 @@ class SharedInstance extends EventEmitter {
         // Add cwd option to ensure proper working directory
         cwd: path.dirname(execPath)
       };
-      
+
       this.child = spawn(execPath, [], spawnOptions);
-      
+
       this.child.stdout.on("data", (stdout) => {
         console.log(stdout.toString());
       });
-      
+
       this.child.stderr.on("data", (stderr) => {
         const errorMessage = stderr.toString();
         if (errorMessage.includes("Request_Id_On_The_Left")) {
@@ -840,10 +877,15 @@ class SharedInstance extends EventEmitter {
 
   removeClient(clientId: string): void {
     this.clients.delete(clientId);
-    
+
     // If no more clients, cleanup the shared instance
+    // But check that no new client is currently initializing to avoid
+    // race condition where cleanup runs while a new client is connecting
     if (this.clients.size === 0) {
-      InstanceManager.getInstance().removeSharedInstance(this.port);
+      const manager = InstanceManager.getInstance();
+      if (!manager._hasInitializingPromise(this.port)) {
+        manager.removeSharedInstance(this.port);
+      }
     }
   }
 
@@ -862,18 +904,48 @@ class SharedInstance extends EventEmitter {
       const formDataString = await new Promise<string>((resolve, reject) => {
         const chunks: Buffer[] = [];
         const form = options.body as unknown as Readable;
-        
-        form.on('data', (chunk) => {
+        let settled = false;
+
+        const onData = (chunk: Buffer | string) => {
           chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        
-        form.on('end', () => {
+        };
+
+        const onEnd = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
           const result = Buffer.concat(chunks).toString('utf8');
           resolve(result);
-        });
-        
-        form.on('error', reject);
-        
+        };
+
+        const onError = (err: Error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(err);
+        };
+
+        const onClose = () => {
+          // Stream destroyed externally before 'end' - reject to prevent hanging
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(new Error('FormData stream was destroyed before completion'));
+          }
+        };
+
+        const cleanup = () => {
+          form.off('data', onData);
+          form.off('end', onEnd);
+          form.off('error', onError);
+          form.off('close', onClose);
+        };
+
+        form.on('data', onData);
+        form.on('end', onEnd);
+        form.on('error', onError);
+        form.on('close', onClose);
+
         // Force reading the stream
         form.resume();
       });
@@ -1067,8 +1139,17 @@ class CycleTLSWebSocket extends EventEmitter {
       }).then(() => {
         if (cb) cb();
       }).catch((err) => {
-        if (cb) cb(err);
-        else this.emit('error', err);
+        if (cb) {
+          cb(err);
+        } else if (this.listenerCount('error') > 0) {
+          this.emit('error', err);
+        } else {
+          // No callback and no error listeners - schedule throw to avoid
+          // unhandled promise rejection silently swallowing the error
+          process.nextTick(() => {
+            throw err;
+          });
+        }
       });
 
     } catch (err) {
@@ -1093,7 +1174,10 @@ class CycleTLSWebSocket extends EventEmitter {
       code: code || 1000,
       reason: reason || ''
     }).catch((err) => {
-      this.emit('error', err);
+      if (this.listenerCount('error') > 0) {
+        this.emit('error', err);
+      }
+      // If no error listeners, swallow close errors gracefully
     });
   }
 
@@ -1357,11 +1441,18 @@ class CycleTLSClientImpl extends EventEmitter {
 
           const stream = new Readable({ read() { } });
 
-          const handleClose = () => {
-            this.sharedInstance.cancelRequest(requestId);
+          let bodyReadError: BodyReadError | null = null;
+
+          const cleanupStreamListeners = () => {
+            stream.off("close", handleClose);
+            this.off(requestId, handleData);
           };
 
-          let bodyReadError: BodyReadError | null = null;
+          const handleClose = () => {
+            // Stream was closed externally (cancel/timeout/destroy)
+            cleanupStreamListeners();
+            this.sharedInstance.cancelRequest(requestId);
+          };
 
           const handleData = (dataResponse: GoDataMessage | GoErrorMessage | GoEndMessage) => {
             if (dataResponse.method === "data") {
@@ -1373,12 +1464,10 @@ class CycleTLSClientImpl extends EventEmitter {
                 message: dataResponse.data.message
               };
               stream.push(null); // Close stream gracefully
-              stream.off("close", handleClose);
-              this.off(requestId, handleData);
+              cleanupStreamListeners();
             } else if (dataResponse.method === "end") {
               stream.push(null);
-              stream.off("close", handleClose);
-              this.off(requestId, handleData);
+              cleanupStreamListeners();
             }
           };
 
@@ -1467,6 +1556,7 @@ class CycleTLSClientImpl extends EventEmitter {
               });
             }
           } catch (error) {
+            cleanupTimeout();
             rejectRequest(error);
           }
         }
@@ -1533,10 +1623,14 @@ class CycleTLSClientImpl extends EventEmitter {
 
     this.on(requestId, handleMessage);
 
-    // Clean up handler when connection closes
-    ws.once('close', () => {
+    // Clean up handler when connection closes or errors
+    const cleanupWsHandler = () => {
       this.off(requestId, handleMessage);
-    });
+      ws.off('close', cleanupWsHandler);
+      ws.off('error', cleanupWsHandler);
+    };
+    ws.once('close', cleanupWsHandler);
+    ws.once('error', cleanupWsHandler);
 
     // Send WebSocket request
     await this.sharedInstance.sendRequest(requestId, {
@@ -1577,22 +1671,41 @@ class CycleTLSClientImpl extends EventEmitter {
 
 // Global cleanup handler for the entire process
 let globalShuttingDown = false;
+let globalCleanupRegistered = false;
 
 const globalCleanup = async () => {
   if (globalShuttingDown) return;
   globalShuttingDown = true;
-  
+
   try {
     await InstanceManager.getInstance().cleanup();
   } catch (error) {
     console.error('Error during global cleanup:', error);
+  } finally {
+    // Remove handlers after cleanup to prevent leaks on create/destroy cycles
+    removeGlobalCleanupHandlers();
   }
 };
 
+function registerGlobalCleanupHandlers(): void {
+  if (globalCleanupRegistered) return;
+  globalCleanupRegistered = true;
+  globalShuttingDown = false;
+  process.on("SIGINT", globalCleanup);
+  process.on("SIGTERM", globalCleanup);
+  process.on("beforeExit", globalCleanup);
+}
+
+function removeGlobalCleanupHandlers(): void {
+  if (!globalCleanupRegistered) return;
+  globalCleanupRegistered = false;
+  process.off("SIGINT", globalCleanup);
+  process.off("SIGTERM", globalCleanup);
+  process.off("beforeExit", globalCleanup);
+}
+
 // Set up process-wide cleanup handlers
-process.once("SIGINT", globalCleanup);
-process.once("SIGTERM", globalCleanup);
-process.once("beforeExit", globalCleanup);
+registerGlobalCleanupHandlers();
 
 // Utility function to convert stream to buffer
 async function streamToBuffer(stream: Readable): Promise<Buffer> {
@@ -1949,6 +2062,8 @@ export { initCycleTLS };
 
 // Internal exports for testing
 export { InstanceManager as _InstanceManager };
+export { registerGlobalCleanupHandlers as _registerGlobalCleanupHandlers };
+export { removeGlobalCleanupHandlers as _removeGlobalCleanupHandlers };
 
 // CommonJS compatibility
 module.exports = CycleTLS;
@@ -1959,4 +2074,6 @@ module.exports.CycleTLSWebSocketV2 = CycleTLSWebSocketV2;
 module.exports.StreamingWebSocket = CycleTLSWebSocketV2;
 module.exports.initCycleTLS = initCycleTLS;
 module.exports._InstanceManager = InstanceManager;
+module.exports._registerGlobalCleanupHandlers = registerGlobalCleanupHandlers;
+module.exports._removeGlobalCleanupHandlers = removeGlobalCleanupHandlers;
 module.exports.__esModule = true;
