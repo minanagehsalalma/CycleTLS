@@ -27,7 +27,23 @@ func GetBuffer() *bytes.Buffer {
 	return buf
 }
 
+// maxBufferSize is the maximum capacity of a buffer that will be returned to the pool.
+// Buffers larger than this are discarded to prevent unbounded memory growth from
+// occasional large responses.
+const maxBufferSize = 256 * 1024 // 256KB
+
 // PutBuffer returns a buffer to the pool for reuse.
+// Issue #8 fix: Reset the buffer before returning to pool to prevent stale data
+// from being accessible if a future caller reads before writing. Also discard
+// oversized buffers to prevent unbounded memory growth.
 func PutBuffer(buf *bytes.Buffer) {
+	if buf == nil {
+		return
+	}
+	// Discard oversized buffers to prevent memory bloat
+	if buf.Cap() > maxBufferSize {
+		return
+	}
+	buf.Reset()
 	bufferPool.Put(buf)
 }

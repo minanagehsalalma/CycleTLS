@@ -40,6 +40,9 @@ func newSafeChannelWriter(ch chan []byte) *safeChannelWriter {
 
 // write safely writes data to the channel, returning false if channel is closed.
 // Uses exclusive Lock and non-blocking select to prevent race between check and send.
+// Issue #6 fix: The Lock (not RLock) ensures atomicity between closed check and send.
+// Non-blocking select is intentional for the dispatcher hot path to avoid backpressure
+// stalls, but callers should log when writes fail.
 func (scw *safeChannelWriter) write(data []byte) bool {
 	scw.mu.Lock()
 	defer scw.mu.Unlock()
@@ -52,6 +55,28 @@ func (scw *safeChannelWriter) write(data []byte) bool {
 	case scw.ch <- data:
 		return true
 	default:
+		// Issue #6: Log dropped data for observability instead of silent drop
+		debugLogger.Printf("safeChannelWriter: data dropped, channel full (len=%d)", len(data))
+		return false
+	}
+}
+
+// writeBlocking safely writes data to the channel with a timeout, returning false
+// if channel is closed or timeout expires. Use for critical messages that should not
+// be silently dropped.
+func (scw *safeChannelWriter) writeBlocking(data []byte, timeout time.Duration) bool {
+	scw.mu.RLock()
+	if scw.closed {
+		scw.mu.RUnlock()
+		return false
+	}
+	scw.mu.RUnlock()
+
+	select {
+	case scw.ch <- data:
+		return true
+	case <-time.After(timeout):
+		debugLogger.Printf("safeChannelWriter: blocking write timed out after %v (len=%d)", timeout, len(data))
 		return false
 	}
 }
@@ -524,13 +549,12 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 		}
 	}()
 
-	// Ensure context cancellation cleanup for ALL paths (HTTP, SSE, WebSocket)
-	if res.cancel != nil {
-		defer res.cancel()
-	}
-
 	// Check for early errors (URL parsing, etc.)
 	if res.err != nil {
+		// Cancel context on error path
+		if res.cancel != nil {
+			res.cancel()
+		}
 		state.UnregisterRequest(res.options.RequestID)
 		b := getBuffer()
 		requestIDLength := len(res.options.RequestID)
@@ -561,30 +585,46 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 		return
 	}
 
-	// Handle SSE connections (dispatchSSEAsync handles its own UnregisterRequest)
+	// Issue #3 fix: SSE and WebSocket handlers manage their own context lifecycle.
+	// Don't cancel the context here - these are long-lived connections where the
+	// handler needs the context to remain active. Each handler cancels its own
+	// context in its cleanup defer.
+
+	// Handle SSE connections (dispatchSSEAsync handles its own context + UnregisterRequest)
 	if res.sseClient != nil {
 		dispatchSSEAsync(res, chanWrite)
 		return
 	}
 
-	// Handle WebSocket connections (dispatchWebSocketAsync handles its own UnregisterRequest)
+	// Handle WebSocket connections (dispatchWebSocketAsync handles its own context + UnregisterRequest)
 	if res.wsClient != nil {
 		dispatchWebSocketAsync(res, chanWrite)
 		return
+	}
+
+	// Issue #3: For HTTP paths, cancel context on exit
+	if res.cancel != nil {
+		defer res.cancel()
 	}
 
 	defer func() {
 		state.UnregisterRequest(res.options.RequestID)
 	}()
 
-	// Extract host from URL for connection reuse tracking
-	urlObj, _ := url.Parse(res.options.Options.URL)
-	hostPort := urlObj.Host
-	if !strings.Contains(hostPort, ":") {
-		if urlObj.Scheme == "https" {
-			hostPort = hostPort + ":443" // Default HTTPS port
-		} else {
-			hostPort = hostPort + ":80" // Default HTTP port
+	// Issue #10 fix: Check for nil URL parse result to prevent nil pointer panic
+	urlObj, err := url.Parse(res.options.Options.URL)
+	hostPort := ""
+	if err != nil || urlObj == nil {
+		debugLogger.Printf("Failed to parse URL for connection reuse tracking: %s", res.options.Options.URL)
+		hostPort = "unknown:443"
+	} else {
+		hostPort = urlObj.Host
+		if !strings.Contains(hostPort, ":") {
+			if urlObj.Scheme == "https" {
+				hostPort = hostPort + ":443" // Default HTTPS port
+			} else {
+				hostPort = hostPort + ":80" // Default HTTP port
+			}
 		}
 	}
 
@@ -846,6 +886,10 @@ func dispatchSSEAsync(res fullRequest, chanWrite *safeChannelWriter) {
 			debugLogger.Printf("Recovered from panic in dispatchSSEAsync for request %s: %v", res.options.RequestID, r)
 			sendPanicError(chanWrite, res.options.RequestID, r)
 		}
+		// Issue #4 fix: Cancel the context when SSE handler exits to clean up resources
+		if res.cancel != nil {
+			res.cancel()
+		}
 		state.UnregisterRequest(res.options.RequestID)
 	}()
 
@@ -938,21 +982,23 @@ func dispatchSSEAsync(res fullRequest, chanWrite *safeChannelWriter) {
 	}
 
 	// Read SSE events
+	// Issue #1 fix: Use labeled loop so break exits the for loop, not just the select
+sseLoop:
 	for {
 		select {
 		case <-res.req.Context().Done():
 			debugLogger.Printf("SSE request %s was canceled", res.options.RequestID)
-			break
+			break sseLoop
 
 		default:
 			event, err := sseResp.NextEvent()
 			if err != nil {
 				if err == io.EOF {
 					// Normal end of stream
-					break
+					break sseLoop
 				}
 				debugLogger.Printf("SSE read error: %s", err.Error())
-				break
+				break sseLoop
 			}
 
 			if event == nil {
@@ -1024,15 +1070,24 @@ func dispatchSSEAsync(res fullRequest, chanWrite *safeChannelWriter) {
 
 // dispatchWebSocketAsync handles WebSocket connections asynchronously with full bidirectional support
 func dispatchWebSocketAsync(res fullRequest, chanWrite *safeChannelWriter) {
+	// Issue #2 fix: Track whether WebSocket was actually registered to avoid
+	// unregistering on error paths before registration occurred (registry leak).
+	wsRegistered := false
 	defer func() {
 		if r := recover(); r != nil {
 			debugLogger.Printf("Recovered from panic in dispatchWebSocketAsync for request %s: %v", res.options.RequestID, r)
 			sendPanicError(chanWrite, res.options.RequestID, r)
 		}
+		// Issue #4 fix: Cancel the context when WebSocket handler exits to clean up resources
+		if res.cancel != nil {
+			res.cancel()
+		}
 		state.UnregisterRequest(res.options.RequestID)
 
-		// Remove from active WebSockets
-		state.UnregisterWebSocket(res.options.RequestID)
+		// Only unregister WebSocket if it was actually registered
+		if wsRegistered {
+			state.UnregisterWebSocket(res.options.RequestID)
+		}
 	}()
 
 	// Connect to WebSocket endpoint
@@ -1063,6 +1118,7 @@ func dispatchWebSocketAsync(res fullRequest, chanWrite *safeChannelWriter) {
 
 	// Register the WebSocket connection
 	state.RegisterWebSocket(res.options.RequestID, wsConn)
+	wsRegistered = true
 
 	// Send initial response with headers
 	sendWebSocketResponse(chanWrite, res.options.RequestID, res.options.Options.URL, resp)
@@ -1102,9 +1158,12 @@ func dispatchWebSocketAsync(res fullRequest, chanWrite *safeChannelWriter) {
 			if err != nil {
 				// Check if this is a timeout - if so, just continue the loop
 				if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
-					// Check if we should exit
+					// Issue #5 fix: Check both done channel and context cancellation
+					// on timeout to prevent goroutine leak when parent context is cancelled
 					select {
 					case <-wsConn.done:
+						return
+					case <-res.req.Context().Done():
 						return
 					default:
 						continue // Just a timeout, keep reading
@@ -1145,6 +1204,10 @@ func dispatchWebSocketAsync(res fullRequest, chanWrite *safeChannelWriter) {
 					if err != nil {
 						debugLogger.Printf("WebSocket send error: %s", err.Error())
 						sendWebSocketError(chanWrite, res.options.RequestID, res.options.Options.URL, nil, err)
+						// Issue #11 fix: Stop processing commands on write error -
+						// the connection is likely broken. Continuing would just
+						// accumulate errors on a dead connection.
+						return
 					}
 
 				case "close":
@@ -1169,12 +1232,16 @@ func dispatchWebSocketAsync(res fullRequest, chanWrite *safeChannelWriter) {
 					err := wsConn.safeWrite(conn, websocket.PingMessage, cmd.Data)
 					if err != nil {
 						debugLogger.Printf("WebSocket ping error: %s", err.Error())
+						// Issue #11 fix: Stop on write error for ping too
+						return
 					}
 
 				case "pong":
 					err := wsConn.safeWrite(conn, websocket.PongMessage, cmd.Data)
 					if err != nil {
 						debugLogger.Printf("WebSocket pong error: %s", err.Error())
+						// Issue #11 fix: Stop on write error for pong too
+						return
 					}
 				}
 
@@ -1328,7 +1395,12 @@ func sendWebSocketOpen(chanWrite *safeChannelWriter, requestID, protocol, extens
 		"extensions": extensions,
 	}
 
-	msgBytes, _ := json.Marshal(openMsg)
+	// Issue #9 fix: Handle JSON marshal error
+	msgBytes, err := json.Marshal(openMsg)
+	if err != nil {
+		debugLogger.Printf("Failed to marshal ws_open message for request %s: %v", requestID, err)
+		return
+	}
 
 	b := getBuffer()
 	defer putBuffer(b)
@@ -1389,7 +1461,12 @@ func sendWebSocketClose(chanWrite *safeChannelWriter, requestID string, code int
 		"reason": reason,
 	}
 
-	msgBytes, _ := json.Marshal(closeMsg)
+	// Issue #9 fix: Handle JSON marshal error
+	msgBytes, err := json.Marshal(closeMsg)
+	if err != nil {
+		debugLogger.Printf("Failed to marshal ws_close message for request %s: %v", requestID, err)
+		return
+	}
 
 	b := getBuffer()
 	defer putBuffer(b)
@@ -1529,12 +1606,18 @@ func readSocket(chanRead chan fullRequest, wsSocket *websocket.Conn) {
 					}
 				}
 
-				// Send command to WebSocket connection
+				// Issue #7 fix: Send command with timeout instead of silently dropping.
+				// Use a short timeout to allow backpressure relief while still reporting
+				// failures via the WebSocket connection's chanWrite.
 				select {
 				case wsConn.commandChan <- cmd:
 					// Command sent successfully
-				default:
-					debugLogger.Printf("WebSocket command channel full for request ID: %s", requestId)
+				case <-time.After(5 * time.Second):
+					debugLogger.Printf("WebSocket command channel full for request ID: %s, command type=%s dropped after timeout", requestId, cmd.Type)
+					// Report error back through the WebSocket connection's writer
+					if wsConn.chanWrite != nil {
+						sendWebSocketError(wsConn.chanWrite, requestId, "", nil, fmt.Errorf("command channel full, %s command dropped", cmd.Type))
+					}
 				}
 
 				continue
