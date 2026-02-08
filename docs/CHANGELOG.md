@@ -1,7 +1,7 @@
 # CycleTLS Changelog
 
 
-## 2.0.6 - (2026-02-07)
+## 3.0.0 - Unreleased
 
 ### New Features
 - **Modern Streaming Protocol** - Credit-based flow control for memory-efficient large file downloads
@@ -16,11 +16,23 @@
   - See [FLOW_CONTROL.md](./FLOW_CONTROL.md) for detailed documentation
 
 ### Breaking Changes
-- **New API** - `import CycleTLS from 'cycletls'` returns a class-based streaming client
+- **New Default API** - `import CycleTLS from 'cycletls'` returns a class-based streaming client
   - Before: `const cycleTLS = await initCycleTLS()` (buffered response)
   - After: `const client = new CycleTLS()` (streaming response)
   - Response body is now a stream - use `for await (const chunk of response.body)`
-- **Removed Legacy API** - The old `initCycleTLS()` / `Legacy()` export has been removed
+  - Legacy API still available via named export: `import { initCycleTLS } from 'cycletls'`
+- **Response Object Changes**:
+  - `response.status` renamed to `response.statusCode` (`status` kept as alias)
+  - `response.body` is now a `Readable` stream (was a buffered string)
+  - `response.data` removed; use `await response.json()` / `await response.text()` instead
+  - Response headers are now always `Record<string, string[]>` (all values are arrays, even single-value headers)
+- **WebSocket API Changes** - Now uses EventEmitter pattern matching the `ws` library:
+  - `.onMessage()` replaced by `.on('message')`
+  - `.onClose()` replaced by `.on('close')`
+  - `.onError()` replaced by `.on('error')`
+  - Added: `.on('open')`, `.ping()`, `.pong()`, `.terminate()`
+- **SSE API Changes** - Added async iterator support via `sse.events()`
+- **Cleanup Method Changed** - `cycleTLS.exit()` replaced by `client.close()`
 - **New Types**:
   - `CycleTLS` - Main client class
   - `CycleTLSOptions` - Client configuration

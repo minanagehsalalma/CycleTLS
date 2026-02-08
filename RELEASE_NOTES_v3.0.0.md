@@ -1,9 +1,7 @@
-# CycleTLS v2.0.6 Release Notes
+# CycleTLS v3.0.0 Release Notes
 
-> **Note:** This release has been renumbered to **v3.0.0** due to breaking changes. See [RELEASE_NOTES_v3.0.0.md](./RELEASE_NOTES_v3.0.0.md) for the current version.
-
-**Release Date**: January 2026
-**Version**: 2.0.6 (now v3.0.0)
+**Release Date**: February 2026
+**Version**: 3.0.0
 **Focus**: Streaming API, WebSocket V2, Full API Parity
 
 ---
@@ -187,7 +185,7 @@ Target Server → conn.ReadMessage() → readCh goroutine
 
 ### Default Export Changed
 
-**Before (v2.0.5):**
+**Before (v2.x):**
 ```typescript
 import initCycleTLS from 'cycletls';
 const client = await initCycleTLS();
@@ -195,7 +193,7 @@ const response = await client(url, options, 'GET');
 console.log(response.body);  // Already parsed
 ```
 
-**After (v2.0.6):**
+**After (v3.0.0):**
 ```typescript
 import CycleTLS from 'cycletls';
 const client = new CycleTLS();
@@ -215,9 +213,11 @@ const client = await initCycleTLS();
 
 | Before | After |
 |--------|-------|
-| `response.status` | `response.statusCode` |
-| `response.body` (parsed) | `response.body` (Readable stream) |
-| `response.json()` | `await response.json()` |
+| `response.status` | `response.statusCode` (`status` kept as alias) |
+| `response.body` (parsed string) | `response.body` (Readable stream) |
+| `response.data` (parsed) | Removed; use `await response.json()` |
+| `response.json()` | `await response.json()` (now async) |
+| `response.headers`: `Record<string, string \| string[]>` | `response.headers`: `Record<string, string[]>` (always arrays) |
 
 ---
 
@@ -259,7 +259,7 @@ export async function streamToJson<T>(stream: Readable): Promise<T>
 
 This release fixes a **critical production bug** that caused application crashes when using connection reuse with concurrent requests.
 
-#### Before (v2.0.5 and earlier)
+#### Before (v2.x and earlier)
 ```javascript
 // ❌ This would cause crashes
 const cycleTLS = await initCycleTLS({ port: 9119 });
@@ -274,7 +274,7 @@ const response = await cycleTLS(url, {
 - Process crashes requiring restart
 - Port binding errors preventing restart
 
-#### After (v2.0.6)
+#### After (v3.0.0)
 ```javascript
 // ✅ Now works perfectly
 const cycleTLS = await initCycleTLS({ port: 9119 });
@@ -295,7 +295,7 @@ const response = await cycleTLS(url, {
 
 ### Connection Reuse Performance (Now Working!)
 
-| Scenario | v2.0.5 | v2.0.6 |
+| Scenario | v2.x | v3.0.0 |
 |----------|---------|---------|
 | Sequential requests (no reuse) | ~800ms each | ~800ms each |
 | Concurrent requests (no reuse) | ~800ms each | ~800ms each |
@@ -312,7 +312,7 @@ const response = await cycleTLS(url, {
 
 Invalid URLs passed to CycleTLS would cause a `panic(err)` in the Go server, crashing the entire process and disconnecting all clients.
 
-**Before (v2.0.5 and earlier):**
+**Before (v2.x and earlier):**
 ```javascript
 // ❌ This would crash the ENTIRE Go server
 const response = await cycleTLS("not-a-valid-url://%%%", {});
@@ -320,7 +320,7 @@ const response = await cycleTLS("not-a-valid-url://%%%", {});
 // Server process exits, all clients disconnected
 ```
 
-**After (v2.0.6):**
+**After (v3.0.0):**
 ```javascript
 // ✅ Now returns a 400 Bad Request error gracefully
 const response = await cycleTLS("not-a-valid-url://%%%", {});
@@ -401,8 +401,8 @@ func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
 ### Modified Files
 - `cycletls/index.go` - Safe channel writer implementation (23 sites updated)
 - `cycletls/roundtripper.go` - Improved connection pool cleanup
-- `docs/CHANGELOG.md` - Updated with v2.0.6 release notes
-- `package.json` - Version bump to 2.0.6
+- `docs/CHANGELOG.md` - Updated with v3.0.0 release notes
+- `package.json` - Version bump to 3.0.0
 
 ---
 
@@ -435,24 +435,26 @@ Average Duration: 706.22 ms
 
 ## Migration Guide
 
-No breaking changes:
+This is a **major release with breaking changes**. See the [v3.0.0 Migration Guide](docs/V3_MIGRATION_GUIDE.md) for full details.
 
-- ✅ Your existing code works without modification
-- ✅ No API changes
-- ✅ No configuration changes needed
-- ✅ Drop-in replacement for v2.0.5
+**Key changes:**
+- Default export changed from `initCycleTLS` to `CycleTLS` class
+- Response body is now a stream (use `.json()`, `.text()`, etc.)
+- `response.status` renamed to `response.statusCode` (alias kept)
+- Headers are now always `Record<string, string[]>`
+- Legacy API available via named export: `import { initCycleTLS } from 'cycletls'`
 
 ### Upgrade Steps
 
 ```bash
 # NPM
-npm install cycletls@2.0.6
+npm install cycletls@latest
 
 # Yarn
-yarn add cycletls@2.0.6
+yarn add cycletls@latest
 
 # PNPM
-pnpm add cycletls@2.0.6
+pnpm add cycletls@latest
 ```
 
 ### Recommended Configuration
@@ -489,7 +491,7 @@ Request 3: ===TLS Handshake=== → Request → Response (800ms)
 Total: 2400ms
 ```
 
-**With connection reuse (v2.0.6):**
+**With connection reuse (v3.0.0):**
 ```
 Request 1: ===TLS Handshake=== → Request → Response (800ms)
 Request 2: (reuse) → Request → Response (350ms)
@@ -1027,7 +1029,7 @@ These are on the roadmap for future releases.
 - **Discussions**: https://github.com/Danny-Dasilva/CycleTLS/discussions
 
 When reporting bugs, include:
-1. CycleTLS version (`2.0.6`)
+1. CycleTLS version (`3.0.0`)
 2. Node.js version
 3. Operating system
 4. Reproduction script
@@ -1040,7 +1042,7 @@ When reporting bugs, include:
 Connection reuse is production-ready. Enable it for 2-3x faster repeated requests.
 
 ```bash
-npm install cycletls@2.0.6
+npm install cycletls@latest
 ```
 
-**Release**: v2.0.6 | **Date**: November 3, 2025 | **Breaking Changes**: None
+**Release**: v3.0.0 | **Date**: February 2026 | **Breaking Changes**: Yes (see above)

@@ -1,8 +1,6 @@
-# CycleTLS V2 Migration Guide
+# CycleTLS v3.0.0 Migration Guide
 
-> **Note:** This file has been superseded by [V3_MIGRATION_GUIDE.md](./V3_MIGRATION_GUIDE.md). This version is retained for reference but all version references below refer to the pre-v3.0.0 naming scheme.
-
-This guide helps you migrate from the legacy CycleTLS API (`initCycleTLS`) to the new streaming API (`new CycleTLS()`).
+This guide helps you migrate from the legacy CycleTLS API (`initCycleTLS`, v2.x and earlier) to the new v3.0.0 streaming API (`new CycleTLS()`).
 
 ## Table of Contents
 
@@ -64,7 +62,7 @@ const cycleTLS = await initCycleTLS({
 });
 ```
 
-### V2 API
+### v3.0.0 API
 ```typescript
 import CycleTLS from 'cycletls';
 
@@ -80,9 +78,9 @@ const client = new CycleTLS({
 ```
 
 **Key Differences:**
-- **No `await` needed**: V2 constructor is synchronous
+- **No `await` needed**: v3.0.0 constructor is synchronous
 - **New options**: `autoSpawn`, `initialWindow`, `creditThreshold` for flow control
-- **Timeout unit**: Legacy uses milliseconds; V2 also uses milliseconds (both)
+- **Timeout unit**: Legacy uses milliseconds; v3.0.0 also uses milliseconds (both)
 
 ## Request Methods
 
@@ -100,7 +98,7 @@ const response = await cycleTLS.get(url, options);
 const response = await cycleTLS.post(url, options);
 ```
 
-### V2 API
+### v3.0.0 API
 
 #### Method 1: `.request()` method
 ```typescript
@@ -118,19 +116,19 @@ const response = await client.post(url, body, options);
 ```
 
 **Key Differences:**
-- **No callable interface**: V2 doesn't support `client(url, options)`
-- **Options object**: V2 `.request()` takes a single options object with `url` and `method` inside
-- **POST body**: V2 `post(url, body, options)` has explicit `body` parameter
+- **No callable interface**: v3.0.0 doesn't support `client(url, options)`
+- **Options object**: v3.0.0 `.request()` takes a single options object with `url` and `method` inside
+- **POST body**: v3.0.0 `post(url, body, options)` has explicit `body` parameter
 
 ## Response Object Differences
 
 ### Property Mapping Table
 
-| Legacy Property | V2 Property | Notes |
+| Legacy Property | v3.0.0 Property | Notes |
 |----------------|-------------|-------|
-| `response.status` | `response.statusCode` | V2 standardizes on `statusCode` |
-| `response.body` | `await response.text()` | V2 body is async method, not property |
-| `response.data` | `await response.json()` | V2 uses method instead of property |
+| `response.status` | `response.statusCode` | v3.0.0 standardizes on `statusCode` (`status` kept as alias) |
+| `response.body` | `await response.text()` | v3.0.0 body is a stream, use methods to consume |
+| `response.data` | `await response.json()` | v3.0.0 uses method instead of property |
 | `response.headers` | `response.headers` | Same name, different format (see below) |
 | `response.finalUrl` | `response.finalUrl` | Unchanged |
 | N/A | `response.requestId` | NEW: Unique request identifier |
@@ -147,7 +145,7 @@ response.headers: Record<string, string | string[]>
 }
 ```
 
-**V2 API:**
+**v3.0.0 API:**
 ```typescript
 response.headers: Record<string, string[]>
 // All values are arrays:
@@ -162,7 +160,7 @@ response.headers: Record<string, string[]>
 // Legacy
 const contentType = response.headers['content-type']; // string or string[]
 
-// V2
+// v3.0.0
 const contentType = response.headers['content-type'][0]; // Always an array
 ```
 
@@ -183,7 +181,7 @@ console.log(response.data);  // JSON object if responseType: 'json'
 console.log(response.body);  // Raw string
 ```
 
-**V2 API:**
+**v3.0.0 API:**
 ```typescript
 interface Response {
   requestId: string;
@@ -227,7 +225,7 @@ for await (const chunk of response.data) {
 }
 ```
 
-### V2 API (Fetch-style methods)
+### v3.0.0 API (Fetch-style methods)
 
 ```typescript
 const response = await client.get(url, options);
@@ -251,9 +249,9 @@ for await (const chunk of response.body) {
 ```
 
 **Key Differences:**
-- **No `responseType` option**: V2 always returns a stream in `response.body`
+- **No `responseType` option**: v3.0.0 always returns a stream in `response.body`
 - **Call methods to parse**: Use `.json()`, `.text()`, etc. when you need the full body
-- **Streaming by default**: V2 is streaming-first; legacy was buffering-first
+- **Streaming by default**: v3.0.0 is streaming-first; legacy was buffering-first
 
 ### Migration: Response Type Handling
 
@@ -262,7 +260,7 @@ for await (const chunk of response.body) {
 const response = await cycleTLS.get(url, { responseType: 'json' });
 const data = response.data;
 
-// V2: Use .json() method
+// v3.0.0: Use .json() method
 const response = await client.get(url);
 const data = await response.json();
 ```
@@ -272,7 +270,7 @@ const data = await response.json();
 const response = await cycleTLS.get(url, { responseType: 'text' });
 const text = response.data;
 
-// V2: Use .text() method
+// v3.0.0: Use .text() method
 const response = await client.get(url);
 const text = await response.text();
 ```
@@ -284,7 +282,7 @@ for await (const chunk of response.data) {
   process(chunk);
 }
 
-// V2: Body is already a stream
+// v3.0.0: Body is already a stream
 const response = await client.get(url);
 for await (const chunk of response.body) {
   process(chunk);
@@ -322,7 +320,7 @@ ws.onError((error) => {
 await ws.close(1000, 'Done');
 ```
 
-### V2 API (ws-library compatible)
+### v3.0.0 API (ws-library compatible)
 
 ```typescript
 const ws = await client.ws('wss://example.com/socket', {
@@ -361,22 +359,33 @@ ws.close(1000, 'Done');
 ```
 
 **Key Differences:**
-- **EventEmitter pattern**: V2 uses `.on()` instead of `.onMessage()`
-- **ws-library compatibility**: V2 matches the popular `ws` library API
-- **Binary detection**: V2 provides `isBinary` flag in message callback
-- **No await on send**: V2 `send()` is synchronous with optional callback
-- **Additional methods**: V2 adds `.ping()`, `.pong()`, `.terminate()`
+- **EventEmitter pattern**: v3.0.0 uses `.on()` instead of `.onMessage()`
+- **ws-library compatibility**: v3.0.0 matches the popular `ws` library API
+- **Binary detection**: v3.0.0 provides `isBinary` flag in message callback
+- **No await on send**: v3.0.0 `send()` is synchronous with optional callback
+- **Additional methods**: v3.0.0 adds `.ping()`, `.pong()`, `.terminate()`
+
+### WebSocket Events
+
+| Event | Callback Signature | Description |
+|-------|-------------------|-------------|
+| `open` | `() => void` | Connection established |
+| `message` | `(data: Buffer, isBinary: boolean) => void` | Message received |
+| `close` | `(code: number, reason: Buffer) => void` | Connection closed |
+| `error` | `(error: Error) => void` | Error occurred |
+| `ping` | `(data: Buffer) => void` | Ping received |
+| `pong` | `(data: Buffer) => void` | Pong received |
 
 ### WebSocket Properties
 
-| Legacy | V2 | Notes |
+| Legacy | v3.0.0 | Notes |
 |--------|----|----|
-| N/A | `ws.url` | NEW: WebSocket URL |
-| N/A | `ws.readyState` | NEW: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED |
-| N/A | `ws.protocol` | NEW: Negotiated subprotocol |
-| N/A | `ws.extensions` | NEW: Negotiated extensions |
-| N/A | `ws.bufferedAmount` | NEW: Bytes queued but not sent |
-| N/A | `ws.binaryType` | NEW: 'nodebuffer', 'arraybuffer', or 'fragments' |
+| N/A | `ws.url` | WebSocket URL |
+| N/A | `ws.readyState` | 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED |
+| N/A | `ws.protocol` | Negotiated subprotocol |
+| N/A | `ws.extensions` | Negotiated extensions |
+| N/A | `ws.bufferedAmount` | Bytes queued but not sent |
+| N/A | `ws.binaryType` | 'nodebuffer', 'arraybuffer', or 'fragments' |
 
 ## Server-Sent Events (SSE)
 
@@ -399,12 +408,12 @@ sse.onError((error) => {
 await sse.close();
 ```
 
-### V2 API
+### v3.0.0 API
 
 ```typescript
 const sse = await client.sse('https://example.com/events', {});
 
-// Method 1: Async iterator
+// Method 1: Async iterator (NEW)
 for await (const event of sse.events()) {
   console.log(event.id);
   console.log(event.event);
@@ -425,8 +434,8 @@ await sse.close();
 ```
 
 **Key Differences:**
-- **Async iterator**: V2 adds `sse.events()` for async iteration
-- **Both patterns supported**: V2 supports both callbacks and async iterators
+- **Async iterator**: v3.0.0 adds `sse.events()` for async iteration
+- **Both patterns supported**: v3.0.0 supports both callbacks and async iterators
 
 ## Migration Examples
 
@@ -446,7 +455,7 @@ console.log(response.data); // Parsed JSON
 await cycleTLS.exit();
 ```
 
-**V2:**
+**v3.0.0:**
 ```typescript
 import CycleTLS from 'cycletls';
 
@@ -470,7 +479,7 @@ const response = await cycleTLS.post('https://api.example.com/users', {
 });
 ```
 
-**V2:**
+**v3.0.0:**
 ```typescript
 const response = await client.post(
   'https://api.example.com/users',
@@ -493,7 +502,7 @@ for await (const chunk of response.data) {
 }
 ```
 
-**V2 (true streaming with backpressure):**
+**v3.0.0 (true streaming with backpressure):**
 ```typescript
 const response = await client.get('https://example.com/large-file.zip');
 
@@ -514,7 +523,7 @@ const response = await cycleTLS('https://tls.peet.ws/api/all', {
 });
 ```
 
-**V2:**
+**v3.0.0:**
 ```typescript
 const response = await client.request({
   url: 'https://tls.peet.ws/api/all',
@@ -537,7 +546,7 @@ try {
 }
 ```
 
-**V2:**
+**v3.0.0:**
 ```typescript
 try {
   const response = await client.get('https://example.com/404');
@@ -556,10 +565,11 @@ try {
 ## Breaking Changes Summary
 
 ### Imports
-- **Changed**: `import initCycleTLS from 'cycletls'` → `import CycleTLS from 'cycletls'`
+- **Changed**: `import initCycleTLS from 'cycletls'` -> `import CycleTLS from 'cycletls'`
+- Legacy still available: `import { initCycleTLS } from 'cycletls'`
 
 ### Initialization
-- **Changed**: `await initCycleTLS()` → `new CycleTLS()`
+- **Changed**: `await initCycleTLS()` -> `new CycleTLS()`
 - **Added**: New options `autoSpawn`, `initialWindow`, `creditThreshold`
 
 ### Request Methods
@@ -568,9 +578,9 @@ try {
 - **Changed**: `.post(url, body, options)` has explicit `body` parameter
 
 ### Response Object
-- **Changed**: `response.status` → `response.statusCode`
-- **Changed**: `response.body` (string) → `response.body` (Readable stream)
-- **Changed**: `response.data` (parsed) → `await response.json()` / `await response.text()`
+- **Changed**: `response.status` -> `response.statusCode` (`status` kept as alias)
+- **Changed**: `response.body` (string) -> `response.body` (Readable stream)
+- **Changed**: `response.data` (parsed) -> `await response.json()` / `await response.text()`
 - **Changed**: `response.headers` now always `Record<string, string[]>` (all values are arrays)
 - **Added**: `response.requestId`
 
@@ -580,18 +590,19 @@ try {
 - **Changed**: Default is streaming (`.body` is a stream), not buffered
 
 ### WebSocket
-- **Changed**: `.onMessage()` → `.on('message')`
-- **Changed**: `.onClose()` → `.on('close')`
-- **Changed**: `.onError()` → `.on('error')`
-- **Added**: `.on('open')`, `.ping()`, `.pong()`, `.terminate()`
-- **Added**: Properties: `.url`, `.readyState`, `.protocol`, `.extensions`
+- **Changed**: `.onMessage()` -> `.on('message')`
+- **Changed**: `.onClose()` -> `.on('close')`
+- **Changed**: `.onError()` -> `.on('error')`
+- **Added**: `.on('open')`, `.on('ping')`, `.on('pong')` events
+- **Added**: `.ping()`, `.pong()`, `.terminate()` methods
+- **Added**: Properties: `.url`, `.readyState`, `.protocol`, `.extensions`, `.bufferedAmount`, `.binaryType`
 
 ### SSE
 - **Added**: `sse.events()` async iterator
 - **Kept**: Callback-based `.onEvent()` and `.onError()` still work
 
 ### Cleanup
-- **Changed**: `cycleTLS.exit()` → `client.close()`
+- **Changed**: `cycleTLS.exit()` -> `client.close()`
 
 ## Migrating Step-by-Step
 
@@ -651,16 +662,16 @@ try {
 
 ## Why Migrate?
 
-The V2 API provides several advantages:
+The v3.0.0 API provides several advantages:
 
 1. **Memory Efficiency**: Streaming with backpressure prevents OOM on large files
 2. **Better Performance**: Credit-based flow control optimizes throughput
 3. **Modern API**: Fetch-style response methods (`.json()`, `.text()`)
 4. **Standards Compliance**: WebSocket API matches the popular `ws` library
-5. **Future-Proof**: V2 is the foundation for future features
+5. **Future-Proof**: v3.0.0 is the foundation for future features
 
 ## Need Help?
 
-- **Legacy API still works**: Use `?v=1` to connect to legacy protocol
-- **Documentation**: See [FLOW_CONTROL.md](./FLOW_CONTROL.md) for V2 details
+- **Legacy API still works**: Use `import { initCycleTLS } from 'cycletls'` for the legacy named export
+- **Documentation**: See [FLOW_CONTROL.md](./FLOW_CONTROL.md) for streaming protocol details
 - **Issues**: Report migration problems at [GitHub Issues](https://github.com/Danny-Dasilva/CycleTLS/issues)

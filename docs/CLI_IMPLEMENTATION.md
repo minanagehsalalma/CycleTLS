@@ -1,5 +1,7 @@
 # CycleTLS CLI Implementation Plan
 
+> **Status: Future Plans** -- This document describes a planned feature that has **not yet been implemented**. The CLI tool described below does not currently exist. This is a design document for future development.
+
 ## Overview
 
 Add a curl-like CLI interface to CycleTLS that allows making HTTP requests with TLS fingerprinting directly from the command line.

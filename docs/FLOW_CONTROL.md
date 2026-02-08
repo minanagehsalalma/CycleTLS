@@ -2,7 +2,7 @@
 
 ## Overview
 
-CycleTLS v2.0.6+ uses a modern streaming protocol by default that provides credit-based backpressure for HTTP requests. This prevents memory explosion when downloading large files or handling high-throughput workloads.
+CycleTLS v3.0.0 uses a modern streaming protocol by default that provides credit-based backpressure for HTTP requests. This prevents memory explosion when downloading large files or handling high-throughput workloads.
 
 ## The Problem
 
@@ -175,11 +175,11 @@ The modern protocol uses a length-prefixed binary format:
 [4B: payload.length][JSON: {statusCode, message}]
 ```
 
-## Migrating from v2.0.5
+## Migrating from v2.x
 
-The API has changed significantly in v2.0.6. Here's how to migrate:
+The API has changed significantly in v3.0.0. Here's how to migrate:
 
-### Before (v2.0.5 - Buffered)
+### Before (v2.x - Buffered)
 
 ```typescript
 import initCycleTLS from 'cycletls';
@@ -195,7 +195,7 @@ console.log(response.body);
 await cycleTLS.exit();
 ```
 
-### After (v2.0.6 - Streaming)
+### After (v3.0.0 - Streaming)
 
 ```typescript
 import CycleTLS from 'cycletls';
@@ -216,7 +216,7 @@ await client.close();
 
 ### Key Migration Points
 
-| Aspect | v2.0.5 (Old) | v2.0.6 (New) |
+| Aspect | v2.x (Old) | v3.0.0 (New) |
 |--------|--------------|--------------|
 | Import | `import initCycleTLS from 'cycletls'` | `import CycleTLS from 'cycletls'` |
 | Initialize | `await initCycleTLS()` | `new CycleTLS()` |
