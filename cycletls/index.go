@@ -97,8 +97,18 @@ type WebSocketConnection struct {
 
 // safeWrite performs a thread-safe write to the WebSocket connection.
 // Gorilla WebSocket is NOT thread-safe for concurrent writes, so all writes
-// must be serialized through this method.
+// must be serialized through this method. Returns an error if the connection
+// is nil or already closed (ReadyState >= 2).
 func (ws *WebSocketConnection) safeWrite(conn *websocket.Conn, messageType int, data []byte) error {
+	if conn == nil {
+		return fmt.Errorf("websocket connection is nil")
+	}
+	ws.mu.RLock()
+	readyState := ws.ReadyState
+	ws.mu.RUnlock()
+	if readyState >= 3 { // CLOSED
+		return fmt.Errorf("websocket connection is closed (readyState=%d)", readyState)
+	}
 	ws.writeMu.Lock()
 	defer ws.writeMu.Unlock()
 	return conn.WriteMessage(messageType, data)
@@ -505,10 +515,12 @@ func dispatchWebSocketRequest(request cycleTLSRequest) (result fullRequest) {
 }
 
 func dispatcherAsync(res fullRequest, chanWrite *safeChannelWriter) {
-	// Add panic recovery to prevent crashes from channel issues
+	// Panic recovery: prevent crashes and propagate error to the response channel
+	// so callers are not left waiting indefinitely for a response.
 	defer func() {
 		if r := recover(); r != nil {
 			debugLogger.Printf("Recovered from panic in dispatcherAsync for request %s: %v", res.options.RequestID, r)
+			sendPanicError(chanWrite, res.options.RequestID, r)
 		}
 	}()
 
@@ -832,6 +844,7 @@ func dispatchSSEAsync(res fullRequest, chanWrite *safeChannelWriter) {
 	defer func() {
 		if r := recover(); r != nil {
 			debugLogger.Printf("Recovered from panic in dispatchSSEAsync for request %s: %v", res.options.RequestID, r)
+			sendPanicError(chanWrite, res.options.RequestID, r)
 		}
 		state.UnregisterRequest(res.options.RequestID)
 	}()
@@ -1014,6 +1027,7 @@ func dispatchWebSocketAsync(res fullRequest, chanWrite *safeChannelWriter) {
 	defer func() {
 		if r := recover(); r != nil {
 			debugLogger.Printf("Recovered from panic in dispatchWebSocketAsync for request %s: %v", res.options.RequestID, r)
+			sendPanicError(chanWrite, res.options.RequestID, r)
 		}
 		state.UnregisterRequest(res.options.RequestID)
 
@@ -1195,9 +1209,40 @@ func dispatchWebSocketAsync(res fullRequest, chanWrite *safeChannelWriter) {
 	sendWebSocketEnd(chanWrite, res.options.RequestID)
 }
 
+// sendPanicError sends an error response for a recovered panic so callers are
+// not left waiting. Uses defer putBuffer for safety since we are already in a
+// recovery context where another panic must not escape.
+func sendPanicError(chanWrite *safeChannelWriter, requestID string, r interface{}) {
+	b := getBuffer()
+	defer putBuffer(b)
+
+	errMsg := fmt.Sprintf("panic: %v", r)
+	requestIDLength := len(requestID)
+	statusCode := 500
+
+	b.WriteByte(byte(requestIDLength >> 8))
+	b.WriteByte(byte(requestIDLength))
+	b.WriteString(requestID)
+	b.WriteByte(0)
+	b.WriteByte(5)
+	b.WriteString("error")
+	b.WriteByte(byte(statusCode >> 8))
+	b.WriteByte(byte(statusCode))
+
+	messageLength := len(errMsg)
+	b.WriteByte(byte(messageLength >> 8))
+	b.WriteByte(byte(messageLength))
+	b.WriteString(errMsg)
+
+	data := make([]byte, b.Len())
+	copy(data, b.Bytes())
+	chanWrite.write(data)
+}
+
 // Helper functions for sending WebSocket messages
 func sendWebSocketError(chanWrite *safeChannelWriter, requestID, _ string, resp *nhttp.Response, err error) {
 	b := getBuffer()
+	defer putBuffer(b)
 	requestIDLength := len(requestID)
 
 	b.WriteByte(byte(requestIDLength >> 8))
@@ -1224,12 +1269,12 @@ func sendWebSocketError(chanWrite *safeChannelWriter, requestID, _ string, resp 
 
 	data := make([]byte, b.Len())
 	copy(data, b.Bytes())
-	putBuffer(b)
 	chanWrite.write(data)
 }
 
 func sendWebSocketResponse(chanWrite *safeChannelWriter, requestID, url string, resp *nhttp.Response) {
 	b := getBuffer()
+	defer putBuffer(b)
 	headerLength := len(resp.Header)
 	requestIDLength := len(requestID)
 	finalUrlLength := len(url)
@@ -1273,7 +1318,6 @@ func sendWebSocketResponse(chanWrite *safeChannelWriter, requestID, url string, 
 
 	data := make([]byte, b.Len())
 	copy(data, b.Bytes())
-	putBuffer(b)
 	chanWrite.write(data)
 }
 
@@ -1287,6 +1331,7 @@ func sendWebSocketOpen(chanWrite *safeChannelWriter, requestID, protocol, extens
 	msgBytes, _ := json.Marshal(openMsg)
 
 	b := getBuffer()
+	defer putBuffer(b)
 	requestIDLength := len(requestID)
 	bodyChunkLength := len(msgBytes)
 
@@ -1304,12 +1349,12 @@ func sendWebSocketOpen(chanWrite *safeChannelWriter, requestID, protocol, extens
 
 	data := make([]byte, b.Len())
 	copy(data, b.Bytes())
-	putBuffer(b)
 	chanWrite.write(data)
 }
 
 func sendWebSocketMessage(chanWrite *safeChannelWriter, requestID string, messageType int, message []byte) {
 	b := getBuffer()
+	defer putBuffer(b)
 	requestIDLength := len(requestID)
 
 	b.WriteByte(byte(requestIDLength >> 8))
@@ -1334,7 +1379,6 @@ func sendWebSocketMessage(chanWrite *safeChannelWriter, requestID string, messag
 
 	data := make([]byte, b.Len())
 	copy(data, b.Bytes())
-	putBuffer(b)
 	chanWrite.write(data)
 }
 
@@ -1348,6 +1392,7 @@ func sendWebSocketClose(chanWrite *safeChannelWriter, requestID string, code int
 	msgBytes, _ := json.Marshal(closeMsg)
 
 	b := getBuffer()
+	defer putBuffer(b)
 	requestIDLength := len(requestID)
 	bodyChunkLength := len(msgBytes)
 
@@ -1365,12 +1410,12 @@ func sendWebSocketClose(chanWrite *safeChannelWriter, requestID string, code int
 
 	data := make([]byte, b.Len())
 	copy(data, b.Bytes())
-	putBuffer(b)
 	chanWrite.write(data)
 }
 
 func sendWebSocketEnd(chanWrite *safeChannelWriter, requestID string) {
 	b := getBuffer()
+	defer putBuffer(b)
 	requestIDLength := len(requestID)
 
 	b.WriteByte(byte(requestIDLength >> 8))
@@ -1382,7 +1427,6 @@ func sendWebSocketEnd(chanWrite *safeChannelWriter, requestID string) {
 
 	data := make([]byte, b.Len())
 	copy(data, b.Bytes())
-	putBuffer(b)
 	chanWrite.write(data)
 }
 

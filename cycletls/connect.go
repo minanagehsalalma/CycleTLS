@@ -44,7 +44,7 @@ type connectDialer struct {
 	DialTLS func(network string, address string) (net.Conn, string, error)
 
 	EnableH2ConnReuse  bool
-	InsecureSkipVerify bool // respect user's TLS verification setting for proxy connections
+	InsecureSkipVerify bool // TLS verification for proxy connection (not target). Defaults to true for backward compat.
 	cacheH2Mu          sync.Mutex
 	cachedH2ClientConn *http2.ClientConn
 	cachedH2RawConn    net.Conn

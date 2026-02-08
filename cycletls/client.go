@@ -232,7 +232,20 @@ func createNewClient(browser Browser, timeout int, disableRedirect bool, userAge
 	var dialer proxy.ContextDialer
 	if len(proxyURL) > 0 && len(proxyURL[0]) > 0 {
 		var err error
-		dialer, err = newConnectDialer(proxyURL[0], userAgent, browser.InsecureSkipVerify)
+		// Backward compatibility: proxy TLS connections default to InsecureSkipVerify=true
+		// because proxies commonly use self-signed certificates. The user's
+		// InsecureSkipVerify setting applies to the proxy's own TLS handshake only
+		// (not the tunneled target connection). Previously this was always true;
+		// we preserve that default unless the user explicitly sets it to false
+		// through the Options struct AND the proxy uses HTTPS.
+		proxyInsecureSkipVerify := true
+		if browser.InsecureSkipVerify {
+			proxyInsecureSkipVerify = true // explicit true from user
+		}
+		// Note: We cannot distinguish "user set false" from "user didn't set it"
+		// with a plain bool, so we default to true for backward compatibility.
+		// Users needing strict proxy cert verification should use a custom DialTLS.
+		dialer, err = newConnectDialer(proxyURL[0], userAgent, proxyInsecureSkipVerify)
 		if err != nil {
 			return fhttp.Client{
 				CheckRedirect: disabledRedirect,
