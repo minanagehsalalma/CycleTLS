@@ -32,7 +32,7 @@ jobs:
           cache: true
           cache-dependency-path: ./cycletls/go.sum
       - name: Export Go
-        run: go env -w  GO111MODULE=auto
+        run: go env -w  GO111MODULE=on
         working-directory: ./
 
       - name: Install golang dependencies
@@ -56,7 +56,7 @@ jobs:
         run: npm version patch -m "Release"
       - name: Retrieve Latest Version
         run: |
-          echo "::set-output name=LATEST_VERSION::$(npm view ${{ env.PACKAGE_NAME }} version)"
+          echo "LATEST_VERSION=$(npm view ${{ env.PACKAGE_NAME }} version)" >> $GITHUB_OUTPUT
         id: version
       - name: Tag git
         run: git tag ${{ steps.version.outputs.LATEST_VERSION }}
@@ -82,6 +82,7 @@ jobs:
         name: Set up Go
         uses: actions/setup-go@v5
         with:
+          go-version: '1.24'
           cache: true
           cache-dependency-path: ./cycletls/go.sum
       -
@@ -91,6 +92,6 @@ jobs:
           # either 'goreleaser' (default) or 'goreleaser-pro'
           distribution: goreleaser
           version: latest
-          args: release --rm-dist
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

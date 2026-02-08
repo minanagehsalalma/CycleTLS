@@ -45,7 +45,7 @@ jobs:
 
       - name: Retrieve Latest Version
         run: |
-          echo "::set-output name=LATEST_VERSION::$(npm view ${{ env.PACKAGE_NAME }} version)"
+          echo "LATEST_VERSION=$(npm view ${{ env.PACKAGE_NAME }} version)" >> $GITHUB_OUTPUT
         id: version
 
       - name: Update to latest version
@@ -62,13 +62,13 @@ jobs:
           fi
 
       - name: Set module-aware mode
-        run: go env -w  GO111MODULE=auto
+        run: go env -w  GO111MODULE=on
 
       - name: Install golang dependencies
         run: while read l; do go get -v "$l"; done < <(go list -f '{{ join .Imports "\n" }}' ./cycletls)
         shell: bash
 
-      - name: Install npm depencencies
+      - name: Install npm dependencies
         run: npm ci --unsafe-perm
 
       - name: Tag Submodule

@@ -2,9 +2,6 @@ name: "🧪 Node.js Tests"
 
 on: [pull_request]
 
-env:
-  GITHUB_HASH: $(git rev-parse --short "$GITHUB_SHA")
-
 jobs:
   node-integration:
     name: Node.js Integration (soft-fail)
@@ -39,8 +36,16 @@ jobs:
         working-directory: ./
 
       - name: Run Integration Tests
+        id: integration-tests
         run: npm test -- --testPathIgnorePatterns=tlsfingerprint
         working-directory: ./
+
+      - name: Report integration test results
+        if: always()
+        run: |
+          if [ "${{ steps.integration-tests.outcome }}" == "failure" ]; then
+            echo "::warning::Integration tests failed - see logs for details"
+          fi
 
   node-tls-fingerprint:
     name: Node.js TLS Fingerprint

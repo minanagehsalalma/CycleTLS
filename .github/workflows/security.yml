@@ -25,7 +25,6 @@ jobs:
 
       - name: Run npm audit
         run: npm audit --audit-level=high
-        continue-on-error: true  # Don't fail build, just report
 
   go-vulncheck:
     name: Go Vulnerability Check
@@ -46,4 +45,3 @@ jobs:
       - name: Run vulnerability check
         working-directory: ./cycletls
         run: govulncheck ./...
-        continue-on-error: true  # Don't fail build, just report

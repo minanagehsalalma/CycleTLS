@@ -97,9 +97,17 @@ jobs:
           done
 
       - name: Integration Tests (excluding tlsfingerprint)
+        id: integration-tests
         working-directory: ./cycletls
         run: |
           go test --race -v -tags=integration ./tests/integration/... -skip 'tlsfingerprint'
+
+      - name: Report integration test results
+        if: always()
+        run: |
+          if [ "${{ steps.integration-tests.outcome }}" == "failure" ]; then
+            echo "::warning::Integration tests failed - see logs for details"
+          fi
 
   go-tls-fingerprint:
     name: Go TLS Fingerprint
