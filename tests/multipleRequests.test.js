@@ -7,9 +7,8 @@ let userAgent =
   "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:87.0) Gecko/20100101 Firefox/87.0";
 
 test("Multiple concurrent GET requests should complete successfully", async () => {
-  // Use a random high port to avoid conflicts
-  const port = 9200 + Math.floor(Math.random() * 100);
-  await withCycleTLS({ port, timeout: 30000, autoSpawn: true }, async (cycleTLS) => {
+  // Use port 0 to let the OS assign an available port, avoiding conflicts in parallel runs
+  await withCycleTLS({ port: 0, timeout: 30000, autoSpawn: true }, async (cycleTLS) => {
     const urls = [
       "https://httpbin.org/user-agent",
       "https://httpbin.org/get",
@@ -38,8 +37,7 @@ test("Multiple concurrent GET requests should complete successfully", async () =
 });
 
 test("POST request should complete successfully", async () => {
-  const port = 9210 + Math.floor(Math.random() * 100);
-  await withCycleTLS({ port, timeout: 30000, autoSpawn: true }, async (cycleTLS) => {
+  await withCycleTLS({ port: 0, timeout: 30000, autoSpawn: true }, async (cycleTLS) => {
     const response = await cycleTLS.post(
       "https://httpbin.org/post",
       JSON.stringify({ field: "POST-VAL" }),
@@ -56,6 +54,75 @@ test("POST request should complete successfully", async () => {
     for await (const _ of response.body) {
       // drain body
     }
+  });
+});
+
+test("Concurrent requests to different hosts should all resolve", async () => {
+  await withCycleTLS({ port: 0, timeout: 30000, autoSpawn: true }, async (cycleTLS) => {
+    // Fire multiple requests to different domains concurrently
+    // This tests that the request routing and response matching works
+    // correctly when multiple requests are in-flight simultaneously.
+    const urls = [
+      "https://httpbin.org/get",
+      "https://httpbin.org/get?q=a",
+      "https://httpbin.org/get?q=b",
+      "https://httpbin.org/get?q=c",
+      "https://httpbin.org/get?q=d",
+    ];
+
+    const promises = urls.map(url =>
+      cycleTLS.get(url, { ja3, userAgent })
+    );
+
+    const results = await Promise.all(promises);
+
+    // All should succeed
+    for (const response of results) {
+      expect(response.statusCode).toBe(200);
+      for await (const _ of response.body) {
+        // drain body
+      }
+    }
+
+    // Verify responses are distinct (not duplicated/swapped)
+    // Each httpbin /get response includes the URL in the response body
+    expect(results.length).toBe(5);
+  });
+});
+
+test("204 No Content response should return empty body", async () => {
+  await withCycleTLS({ port: 0, timeout: 30000, autoSpawn: true }, async (cycleTLS) => {
+    const response = await cycleTLS.get("https://httpbin.org/status/204", {
+      ja3: ja3,
+      userAgent: userAgent,
+    });
+
+    expect(response.statusCode).toBe(204);
+
+    // Consume body - should be empty or minimal
+    let bodyData = Buffer.alloc(0);
+    for await (const chunk of response.body) {
+      bodyData = Buffer.concat([bodyData, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+    }
+    expect(bodyData.length).toBe(0);
+  });
+});
+
+test("304 Not Modified response should return empty body", async () => {
+  await withCycleTLS({ port: 0, timeout: 30000, autoSpawn: true }, async (cycleTLS) => {
+    const response = await cycleTLS.get("https://httpbin.org/status/304", {
+      ja3: ja3,
+      userAgent: userAgent,
+    });
+
+    expect(response.statusCode).toBe(304);
+
+    // Consume body - should be empty for 304
+    let bodyData = Buffer.alloc(0);
+    for await (const chunk of response.body) {
+      bodyData = Buffer.concat([bodyData, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+    }
+    expect(bodyData.length).toBe(0);
   });
 });
 

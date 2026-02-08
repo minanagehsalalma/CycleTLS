@@ -14,7 +14,7 @@ jest.setTimeout(30000);
 describe("HTTP server async close race", () => {
   test("close() during in-flight request should not hang", async () => {
     const client = new CycleTLS({
-      port: 9350 + Math.floor(Math.random() * 100),
+      port: 0,
       autoSpawn: true,
       timeout: 10000,
     });
@@ -39,7 +39,7 @@ describe("HTTP server async close race", () => {
 
   test("close() after successful request should clean up without errors", async () => {
     const client = new CycleTLS({
-      port: 9360 + Math.floor(Math.random() * 100),
+      port: 0,
       autoSpawn: true,
       timeout: 10000,
     });
@@ -59,7 +59,7 @@ describe("HTTP server async close race", () => {
 
   test("multiple close() calls should not throw or hang", async () => {
     const client = new CycleTLS({
-      port: 9370 + Math.floor(Math.random() * 100),
+      port: 0,
       autoSpawn: true,
       timeout: 10000,
     });
@@ -85,7 +85,7 @@ describe("HTTP server async close race", () => {
 
   test("close() on never-used client should not hang", async () => {
     const client = new CycleTLS({
-      port: 9380 + Math.floor(Math.random() * 100),
+      port: 0,
       autoSpawn: true,
       timeout: 5000,
     });

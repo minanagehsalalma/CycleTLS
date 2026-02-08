@@ -34,6 +34,9 @@ describe('WS error after resolution', () => {
 
     bodyStream.on('error', (err) => {
       expect(err.message).toBe('connection reset');
+      // Verify stream is actually destroyed after error propagation
+      expect(bodyStream.destroyed).toBe(true);
+      expect(bodyStream.readable).toBe(false);
       done();
     });
 
@@ -59,5 +62,49 @@ describe('WS error after resolution', () => {
     handleError(new Error('connection refused'));
     expect(rejected).toBe(true);
     expect(bodyStream.destroyed).toBe(false);
+
+    // Clean up: destroy the stream to prevent leak
+    bodyStream.destroy();
+  });
+
+  test('double-destroy on body stream should not throw', (done) => {
+    const bodyStream = new Readable({ read() {} });
+
+    // Attach error handler to prevent unhandled error crashes
+    bodyStream.on('error', (err) => {
+      expect(err.message).toBe('first error');
+      expect(bodyStream.destroyed).toBe(true);
+
+      // Second destroy after first should be safe (no-op, no extra error)
+      expect(() => {
+        bodyStream.destroy(new Error('second error'));
+      }).not.toThrow();
+      expect(bodyStream.destroyed).toBe(true);
+
+      done();
+    });
+
+    // First destroy - triggers the error handler above
+    bodyStream.destroy(new Error('first error'));
+  });
+
+  test('destroy on already-ended stream should be safe', (done) => {
+    const bodyStream = new Readable({ read() {} });
+
+    // Push data and end the stream
+    bodyStream.push(Buffer.from('data'));
+    bodyStream.push(null); // Signal end
+
+    bodyStream.on('end', () => {
+      // After end, destroying should be safe
+      expect(() => {
+        bodyStream.destroy();
+      }).not.toThrow();
+      expect(bodyStream.destroyed).toBe(true);
+      done();
+    });
+
+    // Consume to trigger 'end'
+    bodyStream.resume();
   });
 });

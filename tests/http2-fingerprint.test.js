@@ -1,5 +1,7 @@
 const { CycleTLS } = require("../dist/index.js");
 
+jest.setTimeout(process.env.CI ? 60000 : 30000);
+
 describe("HTTP/2 Fingerprinting Tests", () => {
   let client;
 
@@ -8,7 +10,13 @@ describe("HTTP/2 Fingerprinting Tests", () => {
   });
 
   afterAll(async () => {
-    await client.close();
+    try {
+      if (client) {
+        await client.close();
+      }
+    } catch (e) {
+      // Ignore cleanup errors - client may have failed to initialize
+    }
   });
 
   test("Firefox HTTP/2 fingerprint with peet.ws", async () => {

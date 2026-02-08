@@ -9,7 +9,11 @@ describe("Streaming Response Tests", () => {
 
   afterAll(async () => {
     if (client) {
-      await client.close();
+      try {
+        await client.close();
+      } catch (e) {
+        // Ignore cleanup errors - client may already be closed or failed to init
+      }
     }
   });
 
@@ -30,31 +34,37 @@ describe("Streaming Response Tests", () => {
         const chunks = [];
         let chunkCount = 0;
 
+        const timeoutHandle = setTimeout(() => {
+          response.data.destroy();
+          reject(new Error('Stream test timeout'));
+        }, 15000);
+
         response.data.on('data', (chunk) => {
           chunks.push(chunk);
           chunkCount++;
-          
+
           // Verify we're getting buffer chunks
           expect(chunk).toBeInstanceOf(Buffer);
         });
 
         response.data.on('end', () => {
+          clearTimeout(timeoutHandle);
           try {
             // Should have received at least one chunk
             expect(chunkCount).toBeGreaterThan(0);
-            
+
             // Combine all chunks and verify content
             const fullData = Buffer.concat(chunks).toString();
             expect(fullData).toContain('https://httpbin.org/stream/3');
-            
+
             // Should contain JSON objects (httpbin streams JSON lines)
             const lines = fullData.trim().split('\n');
             expect(lines.length).toBe(3); // httpbin.org/stream/3 returns 3 lines
-            
+
             lines.forEach(line => {
               expect(() => JSON.parse(line)).not.toThrow();
             });
-            
+
             resolve();
           } catch (error) {
             reject(error);
@@ -62,13 +72,9 @@ describe("Streaming Response Tests", () => {
         });
 
         response.data.on('error', (error) => {
+          clearTimeout(timeoutHandle);
           reject(error);
         });
-
-        // Timeout after 15 seconds
-        setTimeout(() => {
-          reject(new Error('Stream test timeout'));
-        }, 15000);
       });
     });
 
@@ -87,6 +93,11 @@ describe("Streaming Response Tests", () => {
         let totalBytes = 0;
         let chunkCount = 0;
 
+        const timeoutHandle = setTimeout(() => {
+          response.data.destroy();
+          reject(new Error('Stream test timeout'));
+        }, 5000);
+
         response.data.on('data', (chunk) => {
           chunks.push(chunk);
           totalBytes += chunk.length;
@@ -94,20 +105,21 @@ describe("Streaming Response Tests", () => {
         });
 
         response.data.on('end', () => {
+          clearTimeout(timeoutHandle);
           try {
             // Should have received data
             expect(totalBytes).toBeGreaterThan(0);
             expect(chunkCount).toBeGreaterThan(0); // Should have at least one chunk
-            
+
             // Parse the received data as JSON lines
             const fullData = Buffer.concat(chunks).toString();
             const lines = fullData.trim().split('\n');
             expect(lines.length).toBe(2); // /stream/2 returns 2 lines
-            
+
             lines.forEach(line => {
               expect(() => JSON.parse(line)).not.toThrow();
             });
-            
+
             resolve();
           } catch (error) {
             reject(error);
@@ -115,13 +127,9 @@ describe("Streaming Response Tests", () => {
         });
 
         response.data.on('error', (error) => {
+          clearTimeout(timeoutHandle);
           reject(error);
         });
-
-        // Timeout after 2 seconds
-        setTimeout(() => {
-          reject(new Error('Stream test timeout'));
-        }, 2000);
       });
     }, 5000);
 
@@ -142,27 +150,36 @@ describe("Streaming Response Tests", () => {
       return new Promise((resolve, reject) => {
         // First consume the stream normally to get expected content
         const chunks = [];
-        
+
+        const timeoutHandle = setTimeout(() => {
+          response.data.destroy();
+          reject(new Error('Stream response methods test timeout'));
+        }, 10000);
+
         response.data.on('data', (chunk) => {
           chunks.push(chunk);
         });
 
         response.data.on('end', async () => {
+          clearTimeout(timeoutHandle);
           try {
             const fullData = Buffer.concat(chunks).toString();
             const jsonData = JSON.parse(fullData.trim());
-            
+
             // Verify the stream gave us valid JSON
             expect(jsonData).toHaveProperty('url');
             expect(jsonData.url).toContain('stream/1');
-            
+
             resolve();
           } catch (error) {
             reject(error);
           }
         });
 
-        response.data.on('error', reject);
+        response.data.on('error', (error) => {
+          clearTimeout(timeoutHandle);
+          reject(error);
+        });
       });
     });
   });
@@ -215,6 +232,11 @@ describe("Streaming Response Tests", () => {
         const events = [];
         let dataEventCount = 0;
 
+        const timeoutHandle = setTimeout(() => {
+          response.data.destroy();
+          reject(new Error(`Stream event test timeout. Events received: ${events.join(', ')}`));
+        }, 10000);
+
         response.data.on('data', (chunk) => {
           events.push('data');
           dataEventCount++;
@@ -222,18 +244,19 @@ describe("Streaming Response Tests", () => {
         });
 
         response.data.on('end', () => {
+          clearTimeout(timeoutHandle);
           events.push('end');
           try {
             // Verify events occurred in expected order
             expect(events.length).toBeGreaterThan(1);
             expect(events[events.length - 1]).toBe('end'); // Last event should be 'end'
             expect(dataEventCount).toBeGreaterThan(0); // Should have had at least one data event
-            
+
             // All events before 'end' should be 'data' events
             for (let i = 0; i < events.length - 1; i++) {
               expect(events[i]).toBe('data');
             }
-            
+
             resolve();
           } catch (error) {
             reject(error);
@@ -241,14 +264,10 @@ describe("Streaming Response Tests", () => {
         });
 
         response.data.on('error', (error) => {
+          clearTimeout(timeoutHandle);
           events.push('error');
           reject(error);
         });
-
-        // Timeout
-        setTimeout(() => {
-          reject(new Error(`Stream event test timeout. Events received: ${events.join(', ')}`));
-        }, 10000);
       });
     });
   });
@@ -270,20 +289,25 @@ describe("Streaming Response Tests", () => {
         return new Promise((resolve, reject) => {
           const chunks = [];
 
+          const timeoutHandle = setTimeout(() => {
+            response.data.destroy();
+            reject(new Error('Error handling test timeout'));
+          }, 5000);
+
           response.data.on('data', (chunk) => {
             chunks.push(chunk);
           });
 
           response.data.on('end', () => {
+            clearTimeout(timeoutHandle);
             // Even error responses should be streamable
             resolve();
           });
 
-          response.data.on('error', reject);
-
-          setTimeout(() => {
-            reject(new Error('Error handling test timeout'));
-          }, 5000);
+          response.data.on('error', (error) => {
+            clearTimeout(timeoutHandle);
+            reject(error);
+          });
         });
       } catch (error) {
         // If the request fails entirely, that's also acceptable

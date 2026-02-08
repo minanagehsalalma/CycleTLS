@@ -1,7 +1,25 @@
 import CycleTLS from '../dist/index.js'
 import { withCycleTLS } from "./test-utils.js";
+import http from 'http';
 jest.setTimeout(30000);
 
+// Check if httpbin.org is reachable before running tests that depend on it
+let httpbinAvailable = true;
+beforeAll(async () => {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const req = http.get('http://httpbin.org/get', { timeout: 5000 }, (res) => {
+        res.resume(); // Consume response body
+        resolve();
+      });
+      req.on('error', () => reject());
+      req.on('timeout', () => { req.destroy(); reject(); });
+    });
+  } catch {
+    httpbinAvailable = false;
+    console.warn('httpbin.org is not reachable - skipping integration tests that depend on it');
+  }
+});
 
 let ja3 = "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49162-49161-49171-49172-51-57-47-53-10,0-23-65281-10-11-35-16-5-51-43-13-45-28-21,29-23-24-25-256-257,0"
 let userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.97 Safari/537.36'
@@ -83,6 +101,10 @@ const myRequests: Request[] = [
 
 
 test('Should Return 200 for all responses', async () => {
+    if (!httpbinAvailable) {
+        console.warn('Skipping: httpbin.org is not reachable');
+        return;
+    }
     await withCycleTLS({ port: 9123 }, async (client) => {
         for (let request of myRequests) {
             let response;

@@ -11,9 +11,8 @@ describe('Binary Data Handling - Issue #297 Fix', () => {
   let client;
 
   beforeEach(async () => {
-    // Use a different port for each test to avoid conflicts
-    const port = 9119 + Math.floor(Math.random() * 1000);
-    client = new CycleTLS({ port });
+    // Use port 0 to let the OS assign an available port, avoiding conflicts in parallel runs
+    client = new CycleTLS({ port: 0 });
   });
 
   afterEach(async () => {
