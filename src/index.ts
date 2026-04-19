@@ -39,7 +39,14 @@ export interface CycleTLSRequestOptions {
   | {
     [key: string]: string;
   };
-  body?: string | URLSearchParams | FormData;
+  body?: string | URLSearchParams | FormData | Buffer | Uint8Array | ArrayBuffer;
+  /**
+   * Raw binary request body. When set, takes priority over `body`.
+   * Bytes are base64-encoded for JSON transport and decoded server-side,
+   * guaranteeing byte-for-byte integrity (no UTF-8 re-encoding).
+   * If `body` is a Buffer/Uint8Array/ArrayBuffer, it is routed here automatically.
+   */
+  bodyBytes?: Buffer | Uint8Array | ArrayBuffer;
   
   // Response type (like Axios)
   responseType?: 'json' | 'text' | 'arraybuffer' | 'blob' | 'stream';
@@ -437,6 +444,25 @@ class SharedInstance extends EventEmitter {
   }
 
   async sendRequest(requestId: string, options: { [key: string]: any }): Promise<void> {
+    // Binary body handling: route Buffer/Uint8Array/ArrayBuffer through `bodyBytes` as base64.
+    // JSON cannot carry raw bytes; the server's JSON decoder unmarshals a base64 string into []byte,
+    // which preserves exact bytes. Without this, bytes > 0x7F get UTF-8 mangled on the wire.
+    const toBuf = (v: any): Buffer | null => {
+      if (v == null) return null;
+      if (Buffer.isBuffer(v)) return v;
+      if (v instanceof ArrayBuffer) return Buffer.from(v);
+      if (ArrayBuffer.isView(v)) return Buffer.from(v.buffer, v.byteOffset, v.byteLength);
+      return null;
+    };
+    const explicitBytes = toBuf(options.bodyBytes);
+    if (explicitBytes) {
+      options.bodyBytes = explicitBytes.toString('base64');
+    }
+    const bodyBuf = toBuf(options.body);
+    if (bodyBuf) {
+      options.bodyBytes = bodyBuf.toString('base64');
+      delete options.body;
+    }
     // Check if options.body is URLSearchParams and convert to string
     if (options.body instanceof URLSearchParams) {
       options.body = options.body.toString();
