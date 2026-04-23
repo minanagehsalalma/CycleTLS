@@ -3,7 +3,7 @@
 
 
 <div align="center">
-	<img src="docs/media/Banner.svg" alt="CycleTLS"/>
+	<img src="docs/media/cycletls-parity-banner.png" alt="CycleTLS Parity"/>
 	<br>
 	
 Currently a WIP and in Active development. See the ![Projects](https://github.com/Danny-Dasilva/CycleTLS/projects/1) Tab for more info

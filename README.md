@@ -3,7 +3,7 @@
 
 
 <div align="center">
-	<img src="docs/media/Banner.png" alt="CycleTLS"/>
+	<img src="docs/media/cycletls-parity-banner.png" alt="CycleTLS Parity"/>
 	<br>
 
 ![build](https://github.com/minanagehsalalma/CycleTLS-Parity/actions/workflows/test_golang.yml/badge.svg)
