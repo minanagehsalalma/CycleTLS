@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CycleTLS Browser Parity Showcase</title>
+    <style>
+      :root {
+        --bg: #081018;
+        --panel: #101b25;
+        --panel-2: #0c141c;
+        --text: #edf3f8;
+        --muted: #98a8b7;
+        --green: #61d490;
+        --red: #ff7676;
+        --cyan: #79d7ff;
+        --yellow: #ffd166;
+        --border: rgba(255, 255, 255, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        width: 1400px;
+        height: 860px;
+        background:
+          radial-gradient(circle at top left, rgba(121, 215, 255, 0.18), transparent 28%),
+          radial-gradient(circle at bottom right, rgba(97, 212, 144, 0.16), transparent 24%),
+          linear-gradient(180deg, #09121a 0%, #050a10 100%);
+        color: var(--text);
+        font-family: "Segoe UI", Arial, sans-serif;
+      }
+
+      .wrap {
+        padding: 42px 48px;
+      }
+
+      .eyebrow {
+        display: inline-block;
+        padding: 8px 12px;
+        border: 1px solid rgba(121, 215, 255, 0.28);
+        border-radius: 999px;
+        color: var(--cyan);
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 18px 0 10px;
+        font-size: 54px;
+        line-height: 1.02;
+        letter-spacing: -0.03em;
+      }
+
+      .subtitle {
+        max-width: 1100px;
+        color: var(--muted);
+        font-size: 24px;
+        line-height: 1.45;
+      }
+
+      .chips {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin: 24px 0 28px;
+      }
+
+      .chip {
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border);
+        color: #dce6ef;
+        font-size: 17px;
+        font-weight: 600;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 22px;
+      }
+
+      .card {
+        border-radius: 22px;
+        border: 1px solid var(--border);
+        overflow: hidden;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+        box-shadow: 0 20px 80px rgba(0, 0, 0, 0.35);
+      }
+
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        background: rgba(255, 255, 255, 0.03);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .dots {
+        display: flex;
+        gap: 8px;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.22);
+      }
+
+      .label {
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .state {
+        font-size: 15px;
+        font-weight: 800;
+        padding: 6px 10px;
+        border-radius: 999px;
+      }
+
+      .state.bad {
+        color: #ffd7d7;
+        background: rgba(255, 118, 118, 0.16);
+      }
+
+      .state.good {
+        color: #d7ffea;
+        background: rgba(97, 212, 144, 0.16);
+      }
+
+      pre {
+        margin: 0;
+        padding: 22px 24px 26px;
+        min-height: 360px;
+        background: linear-gradient(180deg, var(--panel), var(--panel-2));
+        color: #d9e4ef;
+        font-size: 19px;
+        line-height: 1.7;
+        font-family: Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+        white-space: pre-wrap;
+      }
+
+      .red { color: var(--red); }
+      .green { color: var(--green); }
+      .cyan { color: var(--cyan); }
+      .yellow { color: var(--yellow); }
+
+      .footer {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin-top: 22px;
+      }
+
+      .footer-card {
+        padding: 18px 20px;
+        border-radius: 18px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .footer-card strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 18px;
+      }
+
+      .footer-card span {
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.45;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="eyebrow">Fork Showcase</div>
+      <h1>Heavy fingerprinting, not just user-agent spoofing.</h1>
+      <div class="subtitle">
+        This fork closes the last-mile gaps we hit in browser parity work: deterministic Chrome-style TLS,
+        Chromium HTTP/2 settings and priority, stricter header ordering, and proof against real gated targets.
+      </div>
+
+      <div class="chips">
+        <div class="chip">Deterministic Chrome ClientHello</div>
+        <div class="chip">Exact Chromium-style H2 settings</div>
+        <div class="chip">Strict header ordering</div>
+        <div class="chip">Real target validation</div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <div class="card-head">
+            <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+            <div class="label">Upstream-style parity attempt</div>
+            <div class="state bad">403</div>
+          </div>
+          <pre>$ node demo.js
+
+<span class="cyan">probe.ip</span>     <span class="yellow">131.175.127.11</span>
+<span class="cyan">ja3</span>          generic chrome-ish
+<span class="cyan">h2</span>           1:65536;2:0;4:6291456;6:262144|...
+<span class="cyan">headers</span>      close, but not stable enough
+
+<span class="red">target.status</span>  <span class="red">403 Forbidden</span>
+
+Browser-like inputs alone did not clear
+the last mile in the real request path.</pre>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+            <div class="label">This fork + matching egress</div>
+            <div class="state good">200</div>
+          </div>
+          <pre>$ node demo.js
+
+<span class="cyan">probe.ip</span>     <span class="yellow">185.202.220.111</span>
+<span class="cyan">ja3</span>          stable Chrome 138-style
+<span class="cyan">ja4_r</span>        matched
+<span class="cyan">h2</span>           1:65536;2:0;4:6291456;6:262144|...
+<span class="cyan">priority</span>     exclusive / dep=0 / weight=255
+
+<span class="green">target.status</span> <span class="green">200 application/vnd.apple.mpegurl</span>
+
+TLS shape, H2 framing, header order,
+and egress identity all aligned.</pre>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div class="footer-card">
+          <strong>What changed</strong>
+          <span>Deterministic Chrome-style ClientHello, exact H2 settings, and stricter request construction.</span>
+        </div>
+        <div class="footer-card">
+          <strong>What upstream missed in our test</strong>
+          <span>Close spoofing was not enough for real parity when the target cared about both wire shape and route identity.</span>
+        </div>
+        <div class="footer-card">
+          <strong>What this fork proves</strong>
+          <span>Fingerprinting work is only credible when it survives `tls.peet.ws`, header-order probes, and real gated targets.</span>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

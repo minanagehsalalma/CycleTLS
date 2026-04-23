@@ -16,43 +16,61 @@
 	  alt="chat on Discord"></a>
 </div>
 
-> High-control browser fingerprint impersonation for Node.js and Go.
-> Tune TLS, HTTP/2, QUIC, header order, and connection behavior when a plain user-agent spoof is nowhere near enough.
+> Browser-parity-focused CycleTLS fork for Node.js and Go.
+> Built for the cases where upstream JA3/JA4 knobs are still not enough to clear real Chrome-style gating.
 
 <div align="center">
   <a href="#installation"><strong>Install</strong></a>
   ·
-  <a href="#example-cycletls-request-for-typescript-and-javascript"><strong>Quickstart</strong></a>
+  <a href="examples/browser-parity/README.md"><strong>Fork Demo</strong></a>
   ·
-  <a href="#ja4r-raw-tls-fingerprinting"><strong>JA4R</strong></a>
+  <a href="docs/browser-parity-case-study.md"><strong>Case Study</strong></a>
   ·
-  <a href="#http2-fingerprinting"><strong>HTTP/2</strong></a>
+  <a href="#this-fork-vs-upstream"><strong>Fork vs Upstream</strong></a>
   ·
-  <a href="docs/browser-parity-case-study.md"><strong>Browser Parity Case Study</strong></a>
+  <a href="#example-cycletls-request-for-typescript-and-javascript"><strong>API Usage</strong></a>
 </div>
 
 If you have a API change or feature request feel free to open an [Issue](https://github.com/Danny-Dasilva/CycleTLS/issues/new/choose).
 
-## Why People Use CycleTLS
+![Browser parity showcase](docs/media/browser-parity-showcase.png)
 
-- Impersonate real browser network stacks more closely than normal HTTP clients.
-- Control TLS shape with `ja3` and `ja4r`, not just surface headers.
-- Control HTTP/2 settings, flow, priority, and header ordering.
-- Reuse connections, speak WebSocket/SSE, and experiment with QUIC/HTTP/3.
-- Debug real-world parity problems where access depends on fingerprint plus network path.
+## What This Fork Is For
 
-## This Fork Sharpens
+This fork is for the high-friction targets where the original project got close, but not close enough.
 
-- deterministic modern Chrome-style `ClientHello` behavior
-- Chromium-like HTTP/2 settings and initial priority behavior
-- stricter regular-header ordering on the HTTP/2 path
-- a documented browser-parity case study that goes beyond simple header spoofing
+The focus here is not generic spoofing. The focus is **browser parity under hostile conditions**:
 
-## Wire-Level Proof
+- deterministic Chrome-style TLS shape
+- Chromium-like HTTP/2 settings and initial priority
+- stricter header ordering on the HTTP/2 path
+- proof against real gated targets, not just synthetic fingerprint sites
+- a documented parity workflow that includes egress-path debugging, not only JA3 tweaking
 
-- `tls.peet.ws` for JA3, JA4R, extension ordering, and `h2` fingerprints
-- `tools.scrapfly.io` for header-order verification
-- real protected targets for parity validation under the correct egress path
+## This Fork Vs Upstream
+
+The upstream project already exposes strong primitives. This fork is about the parts that were still missing in our real Chrome-parity tests.
+
+| Area | Upstream behavior in our parity test | This fork |
+| --- | --- | --- |
+| Chrome `ClientHello` behavior | close, but not deterministic enough for the target flow | deterministic modern Chrome-style `ClientHelloSpec` |
+| TLS extension ordering | configurable, but not aligned closely enough for our test target | aligned to observed Chromium ordering |
+| HTTP/2 settings | configurable in principle, but not emitted in the exact Chrome-like shape we needed | exact Chromium-style settings + connection flow |
+| Initial HEADERS priority | not Chrome-like in our test path | `exclusive=true`, `streamDep=0`, `weight=255` |
+| Regular header ordering on `h2` | could still be disturbed by request remarshal behavior | explicit order preserved, including lowercase `user-agent` |
+| Real gated target result | `403` in our browser-parity pass | `200` once TLS/H2 parity and egress path matched |
+| Proof assets | general examples | fork-specific case study, demo folder, and front-page proof graphic |
+
+## Quick Proof
+
+- `tls.peet.ws` was used to verify JA3, JA4R, extension ordering, and `h2` fingerprints.
+- `tools.scrapfly.io` was used to verify header ordering.
+- a real protected target was used to validate whether parity survived outside toy probes.
+
+## Fork Assets
+
+- [Browser parity case study](docs/browser-parity-case-study.md)
+- [Browser parity demo folder](examples/browser-parity/README.md)
 
 ## Features
 
