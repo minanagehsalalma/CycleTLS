@@ -7,12 +7,31 @@ import (
 	http2 "github.com/Danny-Dasilva/fhttp/http2"
 )
 
-// HTTP2Fingerprint represents an HTTP/2 client fingerprint
+// HTTP2Fingerprint represents an HTTP/2 client fingerprint.
+//
+// The fingerprint string format is:
+//
+//	settings|connectionFlow|exclusive|priorityOrder
+//
+// Example: "1:65536,2:0,4:6291456,6:262144|15663105|0|m,a,s,p"
 type HTTP2Fingerprint struct {
-	Settings         []http2.Setting
-	ConnectionFlow   uint32
+	Settings       []http2.Setting
+	ConnectionFlow uint32
+	// StreamDependency is a deprecated alias for ConnectionFlow kept for
+	// backward compatibility with the pre-3.0 Go API. New code should set
+	// ConnectionFlow. NewHTTP2Fingerprint and Apply keep both fields in sync.
+	//
+	// Deprecated: use ConnectionFlow instead.
+	StreamDependency uint32
 	Exclusive        bool
 	PriorityOrder    []string
+	// StreamDep is the parent stream dependency reported by the priority
+	// frame (per RFC 7540 §5.3). When zero, Apply falls back to a
+	// Chrome-like default of 0 (no parent).
+	StreamDep uint32
+	// Weight is the priority weight (0-255). When zero, Apply falls back
+	// to a Chrome-like default of 255.
+	Weight uint8
 }
 
 // NewHTTP2Fingerprint creates a new HTTP2Fingerprint from string format
@@ -72,8 +91,11 @@ func NewHTTP2Fingerprint(fingerprint string) (*HTTP2Fingerprint, error) {
 	priorityOrder := strings.Split(parts[3], ",")
 
 	return &HTTP2Fingerprint{
-		Settings:         settings,
-		ConnectionFlow:   connectionFlow,
+		Settings:       settings,
+		ConnectionFlow: connectionFlow,
+		// Mirror into the deprecated alias so callers reading either field
+		// observe the same value.
+		StreamDependency: connectionFlow,
 		Exclusive:        exclusive,
 		PriorityOrder:    priorityOrder,
 	}, nil
@@ -100,15 +122,30 @@ func (f *HTTP2Fingerprint) String() string {
 	return fmt.Sprintf("%s|%d|%d|%s", settingsStr, f.ConnectionFlow, exclusiveFlag, priorityStr)
 }
 
-// Apply configures the HTTP/2 connection with the specified fingerprint
+// Apply configures the HTTP/2 connection with the specified fingerprint.
+//
+// HeaderPriority is driven by the parsed Exclusive / StreamDep / Weight
+// fields. When Weight is zero (e.g. fingerprint string did not carry
+// priority info), a Chrome-like default of 255 is used. The deprecated
+// StreamDependency alias is honoured when ConnectionFlow is unset.
 func (f *HTTP2Fingerprint) Apply(conn *http2.Transport) {
+	connectionFlow := f.ConnectionFlow
+	if connectionFlow == 0 && f.StreamDependency != 0 {
+		connectionFlow = f.StreamDependency
+	}
+
+	weight := f.Weight
+	if weight == 0 {
+		weight = 255
+	}
+
 	conn.HTTP2Settings = &http2.HTTP2Settings{
 		Settings:       f.Settings,
-		ConnectionFlow: int(f.ConnectionFlow),
+		ConnectionFlow: int(connectionFlow),
 		HeaderPriority: &http2.PriorityParam{
-			Exclusive: true,
-			StreamDep: 0,
-			Weight:    255,
+			Exclusive: f.Exclusive,
+			StreamDep: f.StreamDep,
+			Weight:    weight,
 		},
 	}
 }
