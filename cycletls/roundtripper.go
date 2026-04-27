@@ -77,18 +77,31 @@ func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.AddCookie(cookie)
 	}
 
-	// Preserve lowercase user-agent so fhttp's header-order logic can place it correctly.
-	delete(req.Header, "User-Agent")
-	delete(req.Header, "user-agent")
-	req.Header["user-agent"] = []string{rt.UserAgent}
-
-	// Apply header order if specified (for regular headers, not pseudo-headers)
+	// Apply header order if specified (for regular headers, not pseudo-headers).
+	//
+	// When HeaderOrder is non-empty we:
+	//   1. Place the user-agent under the lowercase key so fhttp's header-order
+	//      logic can position it deterministically.
+	//   2. Run the request headers through MarshalHeader for case-insensitive
+	//      ordering, then convert back via ConvertHttpHeader.
+	//   3. Pin the order via the http.HeaderOrderKey sentinel.
+	//
+	// When HeaderOrder is empty we preserve the legacy behaviour of setting
+	// the canonical "User-Agent" key and leaving the rest of the headers
+	// untouched, which avoids surprising case changes for callers that did
+	// not opt into ordered headers.
+	//
+	// Pseudo-header order (http.PHeaderOrderKey) is set in index.go based on
+	// UserAgent parsing and must not be overwritten here.
 	if len(rt.HeaderOrder) > 0 {
-		req.Header[http.HeaderOrderKey] = rt.HeaderOrder
+		delete(req.Header, "User-Agent")
+		delete(req.Header, "user-agent")
+		req.Header["user-agent"] = []string{rt.UserAgent}
 
-		// Note: rt.HeaderOrder contains regular headers like "cache-control", "accept", etc.
-		// Do NOT overwrite http.PHeaderOrderKey which contains pseudo-headers like ":method", ":path"
-		// The pseudo-header order is already set correctly in index.go based on UserAgent parsing
+		req.Header = ConvertHttpHeader(MarshalHeader(req.Header, rt.HeaderOrder))
+		req.Header[http.HeaderOrderKey] = rt.HeaderOrder
+	} else {
+		req.Header.Set("User-Agent", rt.UserAgent)
 	}
 
 	// Get address for dialing
